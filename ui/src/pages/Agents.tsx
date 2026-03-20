@@ -108,7 +108,7 @@ export function Agents() {
       const token = generateToken();
       const record = await pb.collection("agents").create<Agent>({
         name: addingName.trim(),
-        hostname: "",
+        hostname: addingName.trim(),
         os: "",
         ip: "",
         version: "",

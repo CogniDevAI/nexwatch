@@ -191,6 +191,10 @@ collectors_enabled:
   - network
   - sysinfo
   - docker
+  - ports
+  - processes
+  - hardening
+  - vulnerabilities
 YAML
 
     chmod 600 "${CONFIG_DIR}/agent.yaml"
