@@ -1,0 +1,27 @@
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.hub
+    ports:
+      - "8090:8090"
+    volumes:
+      - nexwatch-data:/app/pb_data
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    command:
+      - "--hub=ws://hub:8090/ws/agent"
+      - "--token=changeme"
+      - "--interval=10"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - hub
+    restart: unless-stopped
+
+volumes:
+  nexwatch-data:

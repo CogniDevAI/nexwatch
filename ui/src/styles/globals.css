@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+/*
+ * NexWatch — CogniDevAI Dark Theme
+ * Primary bg: #0a0a0f (darkest)
+ * Surface:    #111118
+ * Elevated:   #1a1a24
+ * Border:     #1e1e2e (subtle)
+ * Cyan:       #06b6d4 (primary accent)
+ * Purple:     #8b5cf6 (secondary accent)
+ * Green:      #10b981 (success / online)
+ * Red:        #ef4444 (error / offline)
+ * Yellow:     #f59e0b (warning)
+ */
+
+@theme {
+  --color-bg-primary: #0a0a0f;
+  --color-bg-surface: #111118;
+  --color-bg-elevated: #1a1a24;
+  --color-border-default: #1e1e2e;
+  --color-border-muted: #16161f;
+  --color-accent-cyan: #06b6d4;
+  --color-accent-purple: #8b5cf6;
+  --color-accent-green: #10b981;
+  --color-accent-red: #ef4444;
+  --color-accent-yellow: #f59e0b;
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #475569;
+}
+
+body {
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* uPlot dark theme overrides */
+.u-wrap {
+  background: transparent !important;
+}
+
+.u-legend {
+  font-family: "Inter", sans-serif !important;
+  font-size: 11px !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.u-legend .u-series > * {
+  padding: 2px 4px !important;
+}
+
+.u-legend .u-value {
+  color: var(--color-text-primary) !important;
+}
+
+.u-cursor-x,
+.u-cursor-y {
+  border-color: var(--color-border-default) !important;
+}
+
+/* Smooth transitions for interactive elements */
+a,
+button {
+  transition-property: color, background-color, border-color, opacity;
+  transition-duration: 150ms;
+  transition-timing-function: ease;
+}
+
+/* Focus ring utility */
+:focus-visible {
+  outline: 2px solid var(--color-accent-cyan);
+  outline-offset: 2px;
+}
+
+/* Selection color */
+::selection {
+  background: var(--color-accent-cyan);
+  color: var(--color-bg-primary);
+}

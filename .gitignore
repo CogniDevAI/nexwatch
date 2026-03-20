@@ -1,0 +1,46 @@
+# Binaries
+bin/
+/agent
+/hub
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+vendor/
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# PocketBase data
+pb_data/
+*.db
+*.db-shm
+*.db-wal
+
+# Node / Frontend
+ui/node_modules/
+ui/dist/
+ui/.vite/
+*.tsbuildinfo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.nvim/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
