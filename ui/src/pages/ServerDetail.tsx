@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import type uPlot from "uplot";
 import {
@@ -9,14 +9,43 @@ import {
   Cpu,
   HardDrive,
   MonitorSmartphone,
+  Container,
+  Wifi,
+  ListTree,
+  Shield,
+  ShieldAlert,
 } from "lucide-react";
 import pb from "@/lib/pocketbase";
 import type { Agent, MetricsResponse } from "@/types";
 import { MetricChart } from "@/components/charts/MetricChart";
 import { TimeRangeSelector } from "@/components/charts/TimeRangeSelector";
 import { DockerTab } from "@/components/server/DockerTab";
+import { PortsTab } from "@/components/server/PortsTab";
+import { ServicesTab } from "@/components/server/ServicesTab";
+import { HardeningTab } from "@/components/server/HardeningTab";
+import { VulnerabilitiesTab } from "@/components/server/VulnerabilitiesTab";
 
-type Tab = "metrics" | "docker";
+type Tab = "metrics" | "docker" | "ports" | "services" | "hardening" | "vulnerabilities";
+
+const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { key: "metrics", label: "Metrics", icon: Activity },
+  { key: "docker", label: "Docker", icon: Container },
+  { key: "ports", label: "Ports", icon: Wifi },
+  { key: "services", label: "Services", icon: ListTree },
+  { key: "hardening", label: "Hardening", icon: Shield },
+  { key: "vulnerabilities", label: "Vulns", icon: ShieldAlert },
+];
+
+const METRICS_REFRESH_INTERVAL = 15_000;
+
+/** Time range durations in seconds */
+const TIME_RANGE_DURATIONS: Record<string, number> = {
+  "1h": 3600,
+  "6h": 21600,
+  "24h": 86400,
+  "7d": 604800,
+  "30d": 2592000,
+};
 
 /** Generate mock empty chart data when no metrics are available */
 function emptyTimeSeries(): uPlot.AlignedData {
@@ -31,6 +60,13 @@ export function ServerDetail() {
   const [timeRange, setTimeRange] = useState("1h");
   const [loading, setLoading] = useState(true);
   const [metricsLoading, setMetricsLoading] = useState(false);
+  const metricsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeRangeRef = useRef(timeRange);
+
+  // Keep ref in sync for interval callback
+  useEffect(() => {
+    timeRangeRef.current = timeRange;
+  }, [timeRange]);
 
   // Fetch agent
   useEffect(() => {
@@ -52,12 +88,13 @@ export function ServerDetail() {
 
   // Fetch metrics
   const fetchMetrics = useCallback(
-    async (start: number, end: number) => {
+    async (start: number, end: number, showLoading = true) => {
       if (!id) return;
-      setMetricsLoading(true);
+      if (showLoading) setMetricsLoading(true);
       try {
         const response = await fetch(
           `/api/custom/metrics?agent_id=${id}&start=${start}&end=${end}`,
+          { headers: { Authorization: pb.authStore.token } },
         );
         if (response.ok) {
           const data = (await response.json()) as MetricsResponse;
@@ -73,11 +110,23 @@ export function ServerDetail() {
     [id],
   );
 
-  // Initial metrics fetch
+  // Auto-refresh metrics polling
   useEffect(() => {
+    // Initial fetch
     const end = Math.floor(Date.now() / 1000);
     const start = end - 3600; // 1h default
     fetchMetrics(start, end);
+
+    // Set up polling interval
+    metricsIntervalRef.current = setInterval(() => {
+      const now = Math.floor(Date.now() / 1000);
+      const duration = TIME_RANGE_DURATIONS[timeRangeRef.current] ?? 3600;
+      fetchMetrics(now - duration, now, false);
+    }, METRICS_REFRESH_INTERVAL);
+
+    return () => {
+      if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
+    };
   }, [fetchMetrics]);
 
   function handleTimeRangeChange(range: {
@@ -191,28 +240,24 @@ export function ServerDetail() {
       </div>
 
       {/* Tab bar */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex gap-1 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-1">
-          <button
-            onClick={() => setActiveTab("metrics")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-150 ${
-              activeTab === "metrics"
-                ? "bg-[var(--color-accent-cyan)]/15 text-[var(--color-accent-cyan)]"
-                : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-            }`}
-          >
-            Metrics
-          </button>
-          <button
-            onClick={() => setActiveTab("docker")}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-all duration-150 ${
-              activeTab === "docker"
-                ? "bg-[var(--color-accent-cyan)]/15 text-[var(--color-accent-cyan)]"
-                : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-            }`}
-          >
-            Docker
-          </button>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+        <div className="overflow-x-auto -mx-1 px-1 scrollbar-thin">
+          <div className="inline-flex gap-1 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-1 min-w-max">
+            {TABS.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all duration-150 whitespace-nowrap ${
+                  activeTab === key
+                    ? "bg-[var(--color-accent-cyan)]/15 text-[var(--color-accent-cyan)]"
+                    : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {activeTab === "metrics" && (
@@ -275,6 +320,10 @@ export function ServerDetail() {
       )}
 
       {activeTab === "docker" && id && <DockerTab agentId={id} />}
+      {activeTab === "ports" && id && <PortsTab agentId={id} />}
+      {activeTab === "services" && id && <ServicesTab agentId={id} />}
+      {activeTab === "hardening" && id && <HardeningTab agentId={id} />}
+      {activeTab === "vulnerabilities" && id && <VulnerabilitiesTab agentId={id} />}
     </div>
   );
 }

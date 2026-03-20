@@ -66,12 +66,8 @@ function UsageBar({
   );
 }
 
-export function ServerCard({ agent, metrics }: ServerCardProps) {
+export function ServerCard({ agent }: ServerCardProps) {
   const navigate = useNavigate();
-
-  const cpuUsage = metrics?.cpu ?? 0;
-  const memUsage = metrics?.memory ?? 0;
-  const diskUsage = metrics?.disk ?? 0;
 
   return (
     <button
@@ -79,21 +75,20 @@ export function ServerCard({ agent, metrics }: ServerCardProps) {
       onClick={() => navigate(`/servers/${agent.id}`)}
       className="w-full text-left rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-5 hover:border-[var(--color-accent-cyan)]/40 hover:bg-[var(--color-bg-elevated)] transition-all duration-200 cursor-pointer group"
     >
-      {/* Header */}
-      <div className="flex items-start justify-between mb-4">
+      <div className="flex items-start justify-between">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] flex items-center justify-center text-[var(--color-text-secondary)] group-hover:text-[var(--color-accent-cyan)] group-hover:border-[var(--color-accent-cyan)]/30 transition-colors">
+          <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] flex items-center justify-center text-[var(--color-text-secondary)] group-hover:text-[var(--color-accent-cyan)] group-hover:border-[var(--color-accent-cyan)]/30 transition-colors">
             {agent.os ? (
               <OsIcon os={agent.os} />
             ) : (
-              <Monitor className="w-4 h-4" />
+              <Monitor className="w-5 h-5" />
             )}
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
               {agent.hostname || agent.name}
             </h3>
-            <p className="text-xs text-[var(--color-text-muted)] truncate">
+            <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">
               {agent.ip || "No IP"}
             </p>
           </div>
@@ -101,28 +96,8 @@ export function ServerCard({ agent, metrics }: ServerCardProps) {
         <StatusDot status={agent.status} />
       </div>
 
-      {/* Usage bars */}
-      <div className="space-y-3">
-        <UsageBar
-          label="CPU"
-          value={cpuUsage}
-          color="var(--color-accent-cyan)"
-        />
-        <UsageBar
-          label="Memory"
-          value={memUsage}
-          color="var(--color-accent-purple)"
-        />
-        <UsageBar
-          label="Disk"
-          value={diskUsage}
-          color="var(--color-accent-yellow)"
-        />
-      </div>
-
-      {/* Footer */}
-      <div className="mt-4 pt-3 border-t border-[var(--color-border-muted)] flex items-center justify-between">
-        <span className="text-xs text-[var(--color-text-muted)]">
+      <div className="mt-3 pt-3 border-t border-[var(--color-border-muted)] flex items-center justify-between">
+        <span className="text-xs text-[var(--color-text-secondary)]">
           {agent.os || "Unknown OS"}
         </span>
         <span

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +19,19 @@ import (
 	"github.com/CogniDevAI/nexwatch/internal/agent/transport"
 	"github.com/CogniDevAI/nexwatch/internal/shared/protocol"
 )
+
+// collectorThrottle tracks last collection times to throttle expensive collectors.
+var (
+	lastCollectTime   = make(map[string]time.Time)
+	lastCollectTimeMu sync.Mutex
+)
+
+// minIntervals defines the minimum interval between collections for specific collectors.
+// Collectors not listed here run every cycle.
+var minIntervals = map[string]time.Duration{
+	"hardening":       5 * time.Minute,
+	"vulnerabilities": 5 * time.Minute,
+}
 
 // version is set at build time via ldflags.
 var version = "dev"
@@ -136,6 +150,18 @@ func registerCollectors(registry *collector.Registry, cfg *config.Config) {
 	if enabled["docker"] {
 		registry.Register(collector.NewDockerCollector(cfg.DockerSocket))
 	}
+	if enabled["ports"] {
+		registry.Register(collector.NewPortsCollector())
+	}
+	if enabled["processes"] {
+		registry.Register(collector.NewProcessesCollector())
+	}
+	if enabled["hardening"] {
+		registry.Register(collector.NewHardeningCollector())
+	}
+	if enabled["vulnerabilities"] {
+		registry.Register(collector.NewVulnerabilitiesCollector())
+	}
 }
 
 // collectorNames returns a comma-separated list of registered collector names.
@@ -150,12 +176,34 @@ func collectorNames(registry *collector.Registry) string {
 	return names
 }
 
+// shouldCollect checks if a collector should run based on its minimum interval.
+func shouldCollect(name string) bool {
+	minInterval, hasThrottle := minIntervals[name]
+	if !hasThrottle {
+		return true // No throttle — always collect.
+	}
+
+	lastCollectTimeMu.Lock()
+	defer lastCollectTimeMu.Unlock()
+
+	last, exists := lastCollectTime[name]
+	if !exists || time.Since(last) >= minInterval {
+		lastCollectTime[name] = time.Now()
+		return true
+	}
+	return false
+}
+
 // collectAndSend runs all collectors and sends the combined metrics.
 func collectAndSend(ctx context.Context, registry *collector.Registry, ws *transport.WSTransport, agentID string) {
 	now := time.Now().UnixMilli()
 	metrics := make([]protocol.MetricData, 0, registry.Count())
 
 	for _, c := range registry.All() {
+		if !shouldCollect(c.Name()) {
+			continue
+		}
+
 		data, err := c.Collect(ctx)
 		if err != nil {
 			log.Printf("[collect] %s error: %v", c.Name(), err)

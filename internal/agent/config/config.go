@@ -31,6 +31,7 @@ func DefaultConfig() *Config {
 		Interval: 10 * time.Second,
 		CollectorsEnabled: []string{
 			"cpu", "memory", "disk", "network", "sysinfo", "docker",
+			"ports", "processes", "hardening", "vulnerabilities",
 		},
 		DockerSocket: "/var/run/docker.sock",
 	}

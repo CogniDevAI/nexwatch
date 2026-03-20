@@ -6,11 +6,19 @@ import (
 )
 
 func init() {
+	// authOnly is a PocketBase API rule that allows any authenticated user.
+	authOnly := "@request.auth.id != ''"
+
 	m.Register(func(app core.App) error {
 		// ---------------------------------------------------------------
 		// Collection: notification_channels (created first — referenced by alert_rules)
 		// ---------------------------------------------------------------
 		notifChannels := core.NewBaseCollection("notification_channels")
+		notifChannels.ListRule = &authOnly
+		notifChannels.ViewRule = &authOnly
+		notifChannels.CreateRule = &authOnly
+		notifChannels.UpdateRule = &authOnly
+		notifChannels.DeleteRule = &authOnly
 		notifChannels.Fields.Add(
 			&core.TextField{Name: "name", Required: true, Max: 255},
 			&core.SelectField{
@@ -33,6 +41,11 @@ func init() {
 		// Collection: agents
 		// ---------------------------------------------------------------
 		agents := core.NewBaseCollection("agents")
+		agents.ListRule = &authOnly
+		agents.ViewRule = &authOnly
+		agents.CreateRule = &authOnly
+		agents.UpdateRule = &authOnly
+		agents.DeleteRule = &authOnly
 		agents.Fields.Add(
 			&core.TextField{Name: "hostname", Required: true, Max: 255},
 			&core.TextField{Name: "os", Max: 100},
@@ -60,6 +73,8 @@ func init() {
 		// Collection: metrics
 		// ---------------------------------------------------------------
 		metrics := core.NewBaseCollection("metrics")
+		metrics.ListRule = &authOnly
+		metrics.ViewRule = &authOnly
 		metrics.Fields.Add(
 			&core.RelationField{
 				Name:          "agent_id",
@@ -72,9 +87,9 @@ func init() {
 				Name:      "type",
 				Required:  true,
 				MaxSelect: 1,
-				Values:    []string{"cpu", "memory", "disk", "network", "docker"},
+				Values:    []string{"cpu", "memory", "disk", "network", "docker", "sysinfo", "ports", "processes", "hardening", "vulnerabilities"},
 			},
-			&core.JSONField{Name: "data", MaxSize: 50000},
+			&core.JSONField{Name: "data", MaxSize: 200000},
 			&core.DateField{Name: "timestamp", Required: true},
 			&core.SelectField{
 				Name:      "resolution",
@@ -96,6 +111,8 @@ func init() {
 		// Collection: docker_containers
 		// ---------------------------------------------------------------
 		dockerContainers := core.NewBaseCollection("docker_containers")
+		dockerContainers.ListRule = &authOnly
+		dockerContainers.ViewRule = &authOnly
 		dockerContainers.Fields.Add(
 			&core.RelationField{
 				Name:          "agent_id",
@@ -127,13 +144,18 @@ func init() {
 		// Collection: alert_rules
 		// ---------------------------------------------------------------
 		alertRules := core.NewBaseCollection("alert_rules")
+		alertRules.ListRule = &authOnly
+		alertRules.ViewRule = &authOnly
+		alertRules.CreateRule = &authOnly
+		alertRules.UpdateRule = &authOnly
+		alertRules.DeleteRule = &authOnly
 		alertRules.Fields.Add(
 			&core.TextField{Name: "name", Required: true, Max: 255},
 			&core.SelectField{
 				Name:      "metric_type",
 				Required:  true,
 				MaxSelect: 1,
-				Values:    []string{"cpu", "memory", "disk", "network", "docker"},
+				Values:    []string{"cpu", "memory", "disk", "network", "docker", "sysinfo", "ports", "processes", "hardening", "vulnerabilities"},
 			},
 			&core.SelectField{
 				Name:      "condition",
@@ -174,6 +196,8 @@ func init() {
 		// Collection: alerts
 		// ---------------------------------------------------------------
 		alerts := core.NewBaseCollection("alerts")
+		alerts.ListRule = &authOnly
+		alerts.ViewRule = &authOnly
 		alerts.Fields.Add(
 			&core.RelationField{
 				Name:          "rule_id",
@@ -214,6 +238,11 @@ func init() {
 		// Collection: settings
 		// ---------------------------------------------------------------
 		settings := core.NewBaseCollection("settings")
+		settings.ListRule = &authOnly
+		settings.ViewRule = &authOnly
+		settings.CreateRule = &authOnly
+		settings.UpdateRule = &authOnly
+		settings.DeleteRule = &authOnly
 		settings.Fields.Add(
 			&core.TextField{Name: "key", Required: true, Max: 255},
 			&core.JSONField{Name: "value", MaxSize: 50000},

@@ -95,3 +95,63 @@ export interface TimeRange {
   start: number;
   end: number;
 }
+
+/** Open port entry reported by agent */
+export interface PortEntry {
+  port: number;
+  protocol: string;
+  pid: number;
+  process: string;
+  address: string;
+}
+
+/** Running process entry reported by agent */
+export interface ProcessEntry {
+  pid: number;
+  name: string;
+  cpu_percent: number;
+  memory_percent: number;
+  memory_rss: number;
+  status: string;
+  user: string;
+  command: string;
+}
+
+/** Individual hardening check result */
+export interface HardeningCheck {
+  name: string;
+  status: "pass" | "fail" | "warn" | "skip";
+  description: string;
+  severity: "critical" | "high" | "medium" | "low";
+}
+
+/** Aggregated hardening scan data */
+export interface HardeningData {
+  checks: HardeningCheck[];
+  score: number;
+  total: number;
+  passed: number;
+  failed: number;
+  warnings: number;
+}
+
+/** Individual vulnerability item */
+export interface VulnerabilityItem {
+  name: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  description: string;
+  recommendation: string;
+}
+
+/** Aggregated vulnerability scan data */
+export interface VulnerabilityData {
+  items: VulnerabilityItem[];
+  summary: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    info: number;
+    total: number;
+  };
+}

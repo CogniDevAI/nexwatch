@@ -64,8 +64,8 @@ export function Dashboard() {
     fetchDashboardSummary();
     const unsubscribe = subscribeToAgents();
 
-    // Refresh metrics summary every 30 seconds
-    const interval = setInterval(fetchDashboardSummary, 30_000);
+    // Refresh metrics summary every 10 seconds (matches agent collection interval)
+    const interval = setInterval(fetchDashboardSummary, 10_000);
 
     return () => {
       unsubscribe();
