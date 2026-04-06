@@ -162,6 +162,15 @@ func registerCollectors(registry *collector.Registry, cfg *config.Config) {
 	if enabled["vulnerabilities"] {
 		registry.Register(collector.NewVulnerabilitiesCollector())
 	}
+	if enabled["diskio"] {
+		registry.Register(collector.NewDiskIOCollector())
+	}
+	if enabled["connections"] {
+		registry.Register(collector.NewConnectionsCollector())
+	}
+	if enabled["services"] {
+		registry.Register(collector.NewServicesCollector())
+	}
 }
 
 // collectorNames returns a comma-separated list of registered collector names.

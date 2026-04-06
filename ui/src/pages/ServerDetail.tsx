@@ -19,6 +19,7 @@ import {
   BarChart2,
   Layers,
   Box,
+  Monitor,
 } from "lucide-react";
 import pb from "@/lib/pocketbase";
 import type { Agent, MetricsResponse } from "@/types";
@@ -29,13 +30,15 @@ import { PortsTab } from "@/components/server/PortsTab";
 import { ServicesTab } from "@/components/server/ServicesTab";
 import { HardeningTab } from "@/components/server/HardeningTab";
 import { VulnerabilitiesTab } from "@/components/server/VulnerabilitiesTab";
+import { SystemTab } from "@/components/server/SystemTab";
 
-type Tab = "metrics" | "docker" | "ports" | "services" | "hardening" | "vulnerabilities";
+type Tab = "metrics" | "docker" | "ports" | "system" | "services" | "hardening" | "vulnerabilities";
 
 const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "metrics", label: "Metrics", icon: Activity },
   { key: "docker", label: "Docker", icon: Container },
   { key: "ports", label: "Ports", icon: Wifi },
+  { key: "system", label: "System", icon: Monitor },
   { key: "services", label: "Services", icon: ListTree },
   { key: "hardening", label: "Hardening", icon: Shield },
   { key: "vulnerabilities", label: "Vulns", icon: ShieldAlert },
@@ -440,6 +443,7 @@ export function ServerDetail() {
 
       {activeTab === "docker" && id && <DockerTab agentId={id} />}
       {activeTab === "ports" && id && <PortsTab agentId={id} />}
+      {activeTab === "system" && id && <SystemTab agentId={id!} />}
       {activeTab === "services" && id && <ServicesTab agentId={id} />}
       {activeTab === "hardening" && id && <HardeningTab agentId={id} />}
       {activeTab === "vulnerabilities" && id && <VulnerabilitiesTab agentId={id} />}

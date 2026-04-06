@@ -18,14 +18,14 @@ func NewMemoryCollector() *MemoryCollector {
 // Name returns the collector identifier.
 func (c *MemoryCollector) Name() string { return "memory" }
 
-// Collect gathers virtual memory usage statistics.
+// Collect gathers virtual memory and swap usage statistics.
 func (c *MemoryCollector) Collect(ctx context.Context) (map[string]any, error) {
 	v, err := mem.VirtualMemoryWithContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("virtual memory: %w", err)
 	}
 
-	return map[string]any{
+	result := map[string]any{
 		"total":        v.Total,
 		"used":         v.Used,
 		"available":    v.Available,
@@ -33,5 +33,16 @@ func (c *MemoryCollector) Collect(ctx context.Context) (map[string]any, error) {
 		"free":         v.Free,
 		"used_percent": v.UsedPercent,
 		"buffers":      v.Buffers,
-	}, nil
+	}
+
+	// Also collect swap memory metrics.
+	swap, err := mem.SwapMemoryWithContext(ctx)
+	if err == nil && swap != nil {
+		result["swap_total"] = swap.Total
+		result["swap_used"] = swap.Used
+		result["swap_free"] = swap.Free
+		result["swap_percent"] = swap.UsedPercent
+	}
+
+	return result, nil
 }

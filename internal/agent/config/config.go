@@ -32,6 +32,7 @@ func DefaultConfig() *Config {
 		CollectorsEnabled: []string{
 			"cpu", "memory", "disk", "network", "sysinfo", "docker",
 			"ports", "processes", "hardening", "vulnerabilities",
+			"diskio", "connections", "services",
 		},
 		DockerSocket: "/var/run/docker.sock",
 	}

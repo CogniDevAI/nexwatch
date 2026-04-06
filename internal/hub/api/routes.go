@@ -67,6 +67,21 @@ func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service) {
 		return handleLatestMetricByType(e, "vulnerabilities")
 	})
 
+	// GET /api/custom/agents/{id}/diskio — latest disk I/O stats for an agent
+	router.GET("/api/custom/agents/{id}/diskio", func(e *core.RequestEvent) error {
+		return handleLatestMetricByType(e, "diskio")
+	})
+
+	// GET /api/custom/agents/{id}/connections — latest TCP connection summary for an agent
+	router.GET("/api/custom/agents/{id}/connections", func(e *core.RequestEvent) error {
+		return handleLatestMetricByType(e, "connections")
+	})
+
+	// GET /api/custom/agents/{id}/services — latest systemd service list for an agent
+	router.GET("/api/custom/agents/{id}/services", func(e *core.RequestEvent) error {
+		return handleLatestMetricByType(e, "services")
+	})
+
 	// GET /api/custom/agents/{id}/hardware — system hardware info from sysinfo, cpu, memory metrics
 	router.GET("/api/custom/agents/{id}/hardware", func(e *core.RequestEvent) error {
 		return handleHardware(e)
@@ -463,6 +478,25 @@ func parseRangeParam(r string) (int64, string) {
 // Examples: "java (bancacore-api.jar)", "java (bancacore-ms.jar)", "nginx"
 func extractCmdKey(name, cmdline string) string {
 	if name == "java" || strings.HasSuffix(name, "/java") {
+		// Wildfly/JBoss: identified by jboss-modules.jar or jboss.server.base.dir.
+		// Extract the instance name from -Djboss.server.base.dir=/path/to/wildfly/INSTANCE.
+		if strings.Contains(cmdline, "jboss-modules.jar") || strings.Contains(cmdline, "jboss.server.base.dir") {
+			const baseDirFlag = "-Djboss.server.base.dir="
+			if idx := strings.Index(cmdline, baseDirFlag); idx >= 0 {
+				rest := strings.TrimSpace(cmdline[idx+len(baseDirFlag):])
+				// The value ends at the next space (next JVM flag) or end of string.
+				fields := strings.Fields(rest)
+				if len(fields) > 0 {
+					instance := filepath.Base(fields[0])
+					return name + " (wildfly/" + instance + ")"
+				}
+			}
+			return name + " (wildfly)"
+		}
+		// ActiveMQ: identified by activemq.jar.
+		if strings.Contains(cmdline, "activemq.jar") {
+			return name + " (activemq)"
+		}
 		// Look for -jar /path/to/something.jar
 		if idx := strings.Index(cmdline, "-jar "); idx >= 0 {
 			rest := strings.TrimSpace(cmdline[idx+5:])
@@ -470,10 +504,6 @@ func extractCmdKey(name, cmdline string) string {
 			if len(fields) > 0 {
 				return name + " (" + filepath.Base(fields[0]) + ")"
 			}
-		}
-		// Wildfly/JBoss standalone: look for jboss-modules.jar or standalone.xml
-		if strings.Contains(cmdline, "jboss-modules") || strings.Contains(cmdline, "wildfly") {
-			return name + " (wildfly)"
 		}
 	}
 	return name
@@ -889,6 +919,9 @@ func handleLatestMetricByType(e *core.RequestEvent, metricType string) error {
 			"processes":       `{"processes":[],"total_count":0}`,
 			"hardening":       `{"checks":[],"score":0,"total":0,"passed":0,"failed":0,"warnings":0}`,
 			"vulnerabilities": `{"items":[],"summary":{"critical":0,"high":0,"medium":0,"low":0},"total":0}`,
+			"diskio":          `{"devices":[]}`,
+			"connections":     `{"summary":{},"total":0,"by_port":[]}`,
+			"services":        `{"services":[],"total":0,"running":0,"failed":0,"other":0}`,
 		}
 		empty, ok := emptyResponses[metricType]
 		if !ok {
