@@ -66,7 +66,7 @@ function UsageBar({
   );
 }
 
-export function ServerCard({ agent }: ServerCardProps) {
+export function ServerCard({ agent, metrics }: ServerCardProps) {
   const navigate = useNavigate();
 
   return (
@@ -96,20 +96,30 @@ export function ServerCard({ agent }: ServerCardProps) {
         <StatusDot status={agent.status} />
       </div>
 
-      <div className="mt-3 pt-3 border-t border-[var(--color-border-muted)] flex items-center justify-between">
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          {agent.os || "Unknown OS"}
-        </span>
-        <span
-          className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-            agent.status === "online"
-              ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
-              : "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]"
-          }`}
-        >
-          {agent.status}
-        </span>
-      </div>
+      {metrics && (
+        <div className="mt-3 pt-3 border-t border-[var(--color-border-muted)] flex flex-col gap-2">
+          <UsageBar label="CPU" value={metrics.cpu} color="var(--color-accent-cyan)" />
+          <UsageBar label="Memory" value={metrics.memory} color="var(--color-accent-purple)" />
+          <UsageBar label="Disk" value={metrics.disk} color="var(--color-accent-yellow)" />
+        </div>
+      )}
+
+      {!metrics && (
+        <div className="mt-3 pt-3 border-t border-[var(--color-border-muted)] flex items-center justify-between">
+          <span className="text-xs text-[var(--color-text-secondary)]">
+            {agent.os || "Unknown OS"}
+          </span>
+          <span
+            className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+              agent.status === "online"
+                ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
+                : "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]"
+            }`}
+          >
+            {agent.status}
+          </span>
+        </div>
+      )}
     </button>
   );
 }
