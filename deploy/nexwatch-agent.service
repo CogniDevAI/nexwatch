@@ -1,0 +1,33 @@
+[Unit]
+Description=NexWatch Agent — system monitoring collector
+Documentation=https://github.com/CogniDevAI/nexwatch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nexwatch
+SupplementaryGroups=docker
+
+# Config: auto-discovers /etc/nexwatch/agent.yaml
+# Optional env-var overrides (NEXWATCH_* prefix). File is optional — systemd won't fail if absent.
+EnvironmentFile=-/etc/nexwatch/agent.env
+
+ExecStart=/usr/local/bin/nexwatch-agent
+
+Restart=on-failure
+RestartSec=5
+
+# File descriptor limit (needed for high-cardinality metric collection)
+LimitNOFILE=65536
+
+SyslogIdentifier=nexwatch-agent
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

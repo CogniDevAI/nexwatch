@@ -71,6 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/in
 
 The script will:
 - Download the latest agent binary from GitHub Releases
+- Verify the download against SHA256 checksums automatically
 - Create a config file at `/etc/nexwatch/agent.yaml`
 - Set up and start a systemd service
 
@@ -93,9 +94,28 @@ collectors_enabled:
   - docker
 ```
 
-**Environment variables**: `NEXWATCH_HUB_URL`, `NEXWATCH_TOKEN`, `NEXWATCH_INTERVAL`.
+**Environment variables** and their corresponding CLI flags:
+
+| Variable | Flag | Default | Description |
+|----------|------|---------|-------------|
+| `NEXWATCH_HUB_URL` | `--hub` | `ws://localhost:8090/ws/agent` | Hub WebSocket URL |
+| `NEXWATCH_TOKEN` | `--token` | (required) | Agent authentication token |
+| `NEXWATCH_INTERVAL` | `--interval` | `10` | Collection interval in seconds |
+| `NEXWATCH_DOCKER_SOCKET` | `--docker-socket` | `/var/run/docker.sock` | Docker socket path |
 
 **CLI flags**: `--hub`, `--token`, `--interval`, `--config`, `--docker-socket`.
+
+### Uninstalling the Agent
+
+```bash
+sudo systemctl stop nexwatch-agent
+sudo systemctl disable nexwatch-agent
+sudo rm /etc/systemd/system/nexwatch-agent.service
+sudo systemctl daemon-reload
+sudo rm /usr/local/bin/nexwatch-agent
+sudo rm -rf /etc/nexwatch
+sudo userdel nexwatch
+```
 
 ## Configuration
 
@@ -156,6 +176,8 @@ make dev-agent
 | `make clean` | Remove build artifacts |
 | `make tidy` | Run go mod tidy |
 | `make fmt` | Format Go and TypeScript code |
+| `make release-agent` | Cross-compile agent for linux/amd64 and linux/arm64 |
+| `make checksums` | Generate SHA256 checksums for release artifacts |
 
 ### Docker
 

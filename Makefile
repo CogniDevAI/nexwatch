@@ -1,4 +1,4 @@
-.PHONY: build-ui build-hub build-agent build-all dev-hub dev-agent dev-ui clean
+.PHONY: build-ui build-hub build-agent build-all dev-hub dev-agent dev-ui clean release-agent checksums
 
 VERSION ?= dev
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
@@ -16,6 +16,19 @@ build-agent:
 
 build-all: build-ui build-hub build-agent
 
+## Release targets
+
+release-agent:
+	mkdir -p dist
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o dist/nexwatch-agent ./cmd/agent
+	tar -czf dist/nexwatch-agent_$(VERSION)_linux_amd64.tar.gz -C dist nexwatch-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o dist/nexwatch-agent ./cmd/agent
+	tar -czf dist/nexwatch-agent_$(VERSION)_linux_arm64.tar.gz -C dist nexwatch-agent
+	rm dist/nexwatch-agent
+
+checksums: release-agent
+	cd dist && shasum -a 256 nexwatch-agent_$(VERSION)_linux_*.tar.gz > nexwatch-agent-checksums.txt
+
 ## Development targets
 
 dev-hub:
@@ -30,7 +43,7 @@ dev-ui:
 ## Utility targets
 
 clean:
-	rm -rf bin/ ui/dist/
+	rm -rf bin/ ui/dist/ dist/
 
 tidy:
 	go mod tidy

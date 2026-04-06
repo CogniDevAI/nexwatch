@@ -1,11 +1,12 @@
 #!/bin/sh
 # NexWatch Agent Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ws://hub:8090/ws/agent --token TOKEN
+# Usage: curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | sh -s -- --hub ws://hub:8090/ws/agent --token TOKEN
 #
 # Environment variables (alternative to flags):
 #   HUB_URL   - Hub WebSocket URL (e.g. ws://hub:8090/ws/agent)
 #   TOKEN     - Agent authentication token
 #   VERSION   - Agent version to install (default: latest)
+#   INTERVAL  - Collection interval in seconds (default: 10)
 
 set -eu
 
@@ -23,6 +24,9 @@ TOKEN="${TOKEN:-}"
 VERSION="${VERSION:-latest}"
 INTERVAL="${INTERVAL:-10}"
 
+# Temp directory — set early so cleanup trap can reference it.
+TMP_DIR=""
+
 # --- Colors ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,7 +37,15 @@ NC='\033[0m' # No Color
 info()    { printf "${CYAN}[INFO]${NC} %s\n" "$1"; }
 success() { printf "${GREEN}[OK]${NC} %s\n" "$1"; }
 warn()    { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
-error()   { printf "${RED}[ERROR]${NC} %s\n" "$1"; exit 1; }
+error()   { printf "${RED}[ERROR]${NC} %s\n" "$1" >&2; exit 1; }
+
+# --- Cleanup trap ---
+cleanup() {
+    if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
+        rm -rf "$TMP_DIR"
+    fi
+}
+trap cleanup EXIT INT TERM
 
 # --- Parse arguments ---
 while [ $# -gt 0 ]; do
@@ -135,17 +147,60 @@ resolve_version() {
     fi
 }
 
+# --- Verify checksum ---
+verify_checksum() {
+    TMP_FILE="$1"
+    CHECKSUM_FILE="$2"
+
+    # Determine which sha256 tool is available.
+    SHA256_CMD=""
+    if command -v sha256sum > /dev/null 2>&1; then
+        SHA256_CMD="sha256sum"
+    elif command -v shasum > /dev/null 2>&1; then
+        SHA256_CMD="shasum -a 256"
+    fi
+
+    if [ -z "$SHA256_CMD" ]; then
+        warn "No sha256sum or shasum found — skipping checksum verification."
+        return
+    fi
+
+    # The .sha256 file contains: "<hash>  <filename>" or just "<hash>".
+    EXPECTED=$(awk '{print $1}' "$CHECKSUM_FILE")
+    if [ -z "$EXPECTED" ]; then
+        warn "Checksum file is empty — skipping verification."
+        return
+    fi
+
+    ACTUAL=$(${SHA256_CMD} "$TMP_FILE" | awk '{print $1}')
+
+    if [ "$ACTUAL" != "$EXPECTED" ]; then
+        error "Checksum verification failed. Expected: ${EXPECTED}  Got: ${ACTUAL}"
+    fi
+
+    success "Checksum verified"
+}
+
 # --- Download binary ---
 download_binary() {
-    DOWNLOAD_URL="${GITHUB_BASE}/releases/download/${VERSION}/${BINARY_NAME}_${VERSION#v}_${OS}_${ARCH}.tar.gz"
+    ARCHIVE_NAME="${BINARY_NAME}_${VERSION#v}_${OS}_${ARCH}.tar.gz"
+    DOWNLOAD_URL="${GITHUB_BASE}/releases/download/${VERSION}/${ARCHIVE_NAME}"
+    CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
+
     TMP_DIR=$(mktemp -d)
-    TMP_FILE="${TMP_DIR}/${BINARY_NAME}.tar.gz"
+    TMP_FILE="${TMP_DIR}/${ARCHIVE_NAME}"
+    TMP_CHECKSUM="${TMP_DIR}/${ARCHIVE_NAME}.sha256"
 
-    info "Downloading ${BINARY_NAME} ${VERSION} from ${DOWNLOAD_URL}..."
-
+    info "Downloading ${BINARY_NAME} ${VERSION}..."
     if ! curl -fsSL -o "$TMP_FILE" "$DOWNLOAD_URL"; then
-        rm -rf "$TMP_DIR"
         error "Download failed. Check that version ${VERSION} exists at ${DOWNLOAD_URL}"
+    fi
+
+    info "Downloading checksum..."
+    if curl -fsSL -o "$TMP_CHECKSUM" "$CHECKSUM_URL" 2>/dev/null; then
+        verify_checksum "$TMP_FILE" "$TMP_CHECKSUM"
+    else
+        warn "Checksum file not found at ${CHECKSUM_URL} — skipping verification."
     fi
 
     info "Extracting..."
@@ -161,20 +216,46 @@ download_binary() {
     done
 
     if [ -z "$EXTRACTED_BINARY" ]; then
-        rm -rf "$TMP_DIR"
         error "Binary not found in archive."
     fi
 
     # Install to target directory.
     install -m 755 "$EXTRACTED_BINARY" "${INSTALL_DIR}/${BINARY_NAME}"
-    rm -rf "$TMP_DIR"
 
     success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
+}
+
+# --- Create system user ---
+create_user() {
+    if id nexwatch > /dev/null 2>&1; then
+        info "System user 'nexwatch' already exists"
+    else
+        info "Creating system user 'nexwatch'..."
+        useradd --system --no-create-home --shell /usr/sbin/nologin nexwatch
+        success "System user 'nexwatch' created"
+    fi
+
+    # Add to docker group if it exists.
+    if getent group docker > /dev/null 2>&1; then
+        if ! id -nG nexwatch | grep -qw docker; then
+            usermod -aG docker nexwatch
+            success "Added 'nexwatch' to 'docker' group"
+        else
+            info "User 'nexwatch' is already in 'docker' group"
+        fi
+    else
+        info "Docker group not found — skipping docker group membership"
+    fi
 }
 
 # --- Create config ---
 create_config() {
     mkdir -p "$CONFIG_DIR"
+
+    if [ -f "${CONFIG_DIR}/agent.yaml" ]; then
+        warn "Config already exists, preserving existing configuration"
+        return
+    fi
 
     cat > "${CONFIG_DIR}/agent.yaml" <<YAML
 # NexWatch Agent Configuration
@@ -198,6 +279,7 @@ collectors_enabled:
 YAML
 
     chmod 600 "${CONFIG_DIR}/agent.yaml"
+    chown nexwatch:nexwatch "${CONFIG_DIR}/agent.yaml"
     success "Config written to ${CONFIG_DIR}/agent.yaml"
 }
 
@@ -212,8 +294,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_DIR}/agent.yaml
-Restart=always
+User=nexwatch
+Group=nexwatch
+EnvironmentFile=-/etc/nexwatch/agent.env
+ExecStart=${INSTALL_DIR}/${BINARY_NAME}
+Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 
@@ -269,6 +354,7 @@ main() {
     check_root
     detect_platform
     resolve_version
+    create_user
     download_binary
     create_config
     create_service
