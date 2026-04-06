@@ -7,7 +7,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=nexwatch
-SupplementaryGroups=docker
+# Uncomment if docker group exists on the host:
+# SupplementaryGroups=docker
 
 # Config: auto-discovers /etc/nexwatch/agent.yaml
 # Optional env-var overrides (NEXWATCH_* prefix). File is optional — systemd won't fail if absent.

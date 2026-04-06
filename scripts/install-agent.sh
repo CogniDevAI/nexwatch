@@ -285,11 +285,17 @@ YAML
 
 # --- Create systemd service ---
 create_service() {
+    # Build optional docker supplementary group line only if docker group exists.
+    DOCKER_GROUP_LINE=""
+    if getent group docker > /dev/null 2>&1; then
+        DOCKER_GROUP_LINE="SupplementaryGroups=docker"
+    fi
+
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<UNIT
 [Unit]
 Description=NexWatch Monitoring Agent
 Documentation=https://github.com/${REPO}
-After=network-online.target docker.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -308,9 +314,7 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=${CONFIG_DIR}
 PrivateTmp=true
-
-# Allow access to Docker socket
-SupplementaryGroups=docker
+${DOCKER_GROUP_LINE}
 
 # Logging
 StandardOutput=journal
