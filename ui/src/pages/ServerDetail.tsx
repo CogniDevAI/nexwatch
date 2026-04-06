@@ -296,50 +296,60 @@ export function ServerDetail() {
 
             {/* Row 2: shown only when hardware data is available */}
             {hardware && (
-              <div className="flex flex-wrap items-center gap-4 text-sm text-[var(--color-text-muted)] mt-1">
+              <div className="flex flex-wrap items-center gap-4 text-sm mt-1">
                 {hardware.kernel && (
                   <span className="flex items-center gap-1.5">
-                    <Server className="w-3.5 h-3.5" />
-                    {hardware.kernel}
+                    <Server className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                    <span className="text-[var(--color-text-muted)]">Kernel:</span>
+                    <span className="text-[var(--color-text-secondary)]">{hardware.kernel}</span>
                   </span>
                 )}
                 {(hardware.cpu_logical ?? 0) > 0 && (
                   <span className="flex items-center gap-1.5">
-                    <Cpu className="w-3.5 h-3.5" />
-                    {hardware.cpu_logical} cores
-                    {hardware.cpu_physical && hardware.cpu_physical !== hardware.cpu_logical
-                      ? ` (${hardware.cpu_physical} physical)`
-                      : ""}
+                    <Cpu className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                    <span className="text-[var(--color-text-muted)]">Cores:</span>
+                    <span className="text-[var(--color-text-secondary)]">
+                      {hardware.cpu_logical}
+                      {hardware.cpu_physical && hardware.cpu_physical !== hardware.cpu_logical
+                        ? ` (${hardware.cpu_physical} physical)`
+                        : ""}
+                    </span>
                   </span>
                 )}
                 {(hardware.total_ram ?? 0) > 0 && (
                   <span className="flex items-center gap-1.5">
-                    <Database className="w-3.5 h-3.5" />
-                    {formatBytes(hardware.total_ram!)}
+                    <Database className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                    <span className="text-[var(--color-text-muted)]">RAM:</span>
+                    <span className="text-[var(--color-text-secondary)]">{formatBytes(hardware.total_ram!)}</span>
                   </span>
                 )}
                 {(hardware.uptime ?? 0) > 0 && (
                   <span className="flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5" />
-                    {formatUptime(hardware.uptime!)}
+                    <Activity className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                    <span className="text-[var(--color-text-muted)]">Uptime:</span>
+                    <span className="text-[var(--color-text-secondary)]">{formatUptime(hardware.uptime!)}</span>
                   </span>
                 )}
-                {(hardware.load1 !== undefined) && (
+                {hardware.load1 !== undefined && (
                   <span className="flex items-center gap-1.5">
-                    <BarChart2 className="w-3.5 h-3.5" />
-                    {hardware.load1.toFixed(2)} / {(hardware.load5 ?? 0).toFixed(2)} / {(hardware.load15 ?? 0).toFixed(2)}
+                    <BarChart2 className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                    <span className="text-[var(--color-text-muted)]">Load:</span>
+                    <span className="text-[var(--color-text-secondary)]">
+                      {hardware.load1.toFixed(2)} / {(hardware.load5 ?? 0).toFixed(2)} / {(hardware.load15 ?? 0).toFixed(2)}
+                    </span>
                   </span>
                 )}
                 {(hardware.procs ?? 0) > 0 && (
                   <span className="flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5" />
-                    {hardware.procs} processes
+                    <Layers className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                    <span className="text-[var(--color-text-secondary)]">{hardware.procs} processes</span>
                   </span>
                 )}
                 {hardware.arch && (
                   <span className="flex items-center gap-1.5">
-                    <Box className="w-3.5 h-3.5" />
-                    {hardware.arch}
+                    <Box className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                    <span className="text-[var(--color-text-muted)]">Arch:</span>
+                    <span className="text-[var(--color-text-secondary)]">{hardware.arch}</span>
                   </span>
                 )}
               </div>
