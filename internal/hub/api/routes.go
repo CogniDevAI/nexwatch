@@ -35,6 +35,16 @@ func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service) {
 		return handleInstallCommand(e)
 	})
 
+	// GET /api/custom/agents/{id}/processes/history — aggregate process stats over a time range
+	router.GET("/api/custom/agents/{id}/processes/history", func(e *core.RequestEvent) error {
+		return handleProcessHistory(e)
+	})
+
+	// GET /api/custom/agents/{id}/processes/timeline — time-series data for a specific process name
+	router.GET("/api/custom/agents/{id}/processes/timeline", func(e *core.RequestEvent) error {
+		return handleProcessTimeline(e)
+	})
+
 	// GET /api/custom/agents/{id}/ports — latest open ports for an agent
 	router.GET("/api/custom/agents/{id}/ports", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "ports")
@@ -426,6 +436,255 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+// parseRangeParam converts a range string ("1h", "6h", "24h") to milliseconds.
+// Returns the duration in milliseconds and the canonical range label.
+func parseRangeParam(r string) (int64, string) {
+	switch r {
+	case "6h":
+		return 6 * 60 * 60 * 1000, "6h"
+	case "24h":
+		return 24 * 60 * 60 * 1000, "24h"
+	default:
+		return 1 * 60 * 60 * 1000, "1h"
+	}
+}
+
+// processSnapshot holds parsed process data from a single metrics record.
+type processEntry struct {
+	PID        int     `json:"pid"`
+	Name       string  `json:"name"`
+	CPUPercent float64 `json:"cpu_percent"`
+	MemPercent float64 `json:"mem_percent"`
+	RSS        int64   `json:"rss"`
+	Status     string  `json:"status"`
+	User       string  `json:"user"`
+	Cmdline    string  `json:"cmdline"`
+}
+
+type processSnapshot struct {
+	Processes  []processEntry `json:"processes"`
+	TotalCount int            `json:"total_count"`
+}
+
+// handleProcessHistory aggregates process stats across historical snapshots
+// to identify top resource consumers.
+func handleProcessHistory(e *core.RequestEvent) error {
+	agentID := e.Request.PathValue("id")
+	if agentID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "agent ID is required"})
+	}
+
+	// Verify agent exists.
+	_, err := e.App.FindRecordById("agents", agentID)
+	if err != nil {
+		return e.JSON(http.StatusNotFound, map[string]string{"error": "agent not found"})
+	}
+
+	rangeStr := e.Request.URL.Query().Get("range")
+	rangeMs, rangeLabel := parseRangeParam(rangeStr)
+	since := time.Now().UnixMilli() - rangeMs
+
+	records, err := e.App.FindRecordsByFilter(
+		"metrics",
+		"agent_id = {:agentId} && type = 'processes' && timestamp >= {:since}",
+		"-timestamp",
+		500,
+		0,
+		map[string]any{
+			"agentId": agentID,
+			"since":   since,
+		},
+	)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query metrics"})
+	}
+
+	type processStats struct {
+		name        string
+		user        string
+		sampleCount int
+		cpuSum      float64
+		maxCPU      float64
+		memSum      float64
+		maxMem      float64
+		maxRSS      int64
+	}
+
+	statsMap := make(map[string]*processStats)
+
+	for _, record := range records {
+		dataStr := record.GetString("data")
+		var snap processSnapshot
+		if err := json.Unmarshal([]byte(dataStr), &snap); err != nil {
+			continue
+		}
+		for _, p := range snap.Processes {
+			if p.Name == "" {
+				continue
+			}
+			s, ok := statsMap[p.Name]
+			if !ok {
+				s = &processStats{name: p.Name}
+				statsMap[p.Name] = s
+			}
+			s.sampleCount++
+			s.cpuSum += p.CPUPercent
+			if p.CPUPercent > s.maxCPU {
+				s.maxCPU = p.CPUPercent
+			}
+			s.memSum += p.MemPercent
+			if p.MemPercent > s.maxMem {
+				s.maxMem = p.MemPercent
+			}
+			if p.RSS > s.maxRSS {
+				s.maxRSS = p.RSS
+			}
+			s.user = p.User
+		}
+	}
+
+	type resultEntry struct {
+		Name        string  `json:"name"`
+		User        string  `json:"user"`
+		SampleCount int     `json:"sample_count"`
+		AvgCPU      float64 `json:"avg_cpu"`
+		MaxCPU      float64 `json:"max_cpu"`
+		AvgMem      float64 `json:"avg_mem"`
+		MaxMem      float64 `json:"max_mem"`
+		MaxRSS      int64   `json:"max_rss"`
+	}
+
+	results := make([]resultEntry, 0, len(statsMap))
+	for _, s := range statsMap {
+		var avgCPU, avgMem float64
+		if s.sampleCount > 0 {
+			avgCPU = math.Round(s.cpuSum/float64(s.sampleCount)*100) / 100
+			avgMem = math.Round(s.memSum/float64(s.sampleCount)*100) / 100
+		}
+		results = append(results, resultEntry{
+			Name:        s.name,
+			User:        s.user,
+			SampleCount: s.sampleCount,
+			AvgCPU:      avgCPU,
+			MaxCPU:      math.Round(s.maxCPU*100) / 100,
+			AvgMem:      avgMem,
+			MaxMem:      math.Round(s.maxMem*100) / 100,
+			MaxRSS:      s.maxRSS,
+		})
+	}
+
+	// Sort by avg_cpu descending, take top 20.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].AvgCPU > results[j].AvgCPU
+	})
+	if len(results) > 20 {
+		results = results[:20]
+	}
+
+	return e.JSON(http.StatusOK, map[string]any{
+		"range":          rangeLabel,
+		"snapshot_count": len(records),
+		"top_by_cpu":     results,
+	})
+}
+
+// handleProcessTimeline returns time-series CPU/memory data for a specific process name.
+func handleProcessTimeline(e *core.RequestEvent) error {
+	agentID := e.Request.PathValue("id")
+	if agentID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "agent ID is required"})
+	}
+
+	processName := e.Request.URL.Query().Get("name")
+	if processName == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "name param is required"})
+	}
+
+	// Verify agent exists.
+	_, err := e.App.FindRecordById("agents", agentID)
+	if err != nil {
+		return e.JSON(http.StatusNotFound, map[string]string{"error": "agent not found"})
+	}
+
+	rangeStr := e.Request.URL.Query().Get("range")
+	rangeMs, rangeLabel := parseRangeParam(rangeStr)
+	since := time.Now().UnixMilli() - rangeMs
+
+	records, err := e.App.FindRecordsByFilter(
+		"metrics",
+		"agent_id = {:agentId} && type = 'processes' && timestamp >= {:since}",
+		"+timestamp",
+		720,
+		0,
+		map[string]any{
+			"agentId": agentID,
+			"since":   since,
+		},
+	)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to query metrics"})
+	}
+
+	type timelinePoint struct {
+		Timestamp  int64   `json:"timestamp"`
+		CPUPercent float64 `json:"cpu_percent"`
+		MemPercent float64 `json:"mem_percent"`
+		RSS        int64   `json:"rss"`
+		PID        int     `json:"pid"`
+	}
+
+	points := make([]timelinePoint, 0, len(records))
+
+	for _, record := range records {
+		ts := record.GetInt("timestamp")
+		dataStr := record.GetString("data")
+		var snap processSnapshot
+		if err := json.Unmarshal([]byte(dataStr), &snap); err != nil {
+			continue
+		}
+
+		// Find the process instance with the highest cpu_percent.
+		var best *processEntry
+		for i := range snap.Processes {
+			p := &snap.Processes[i]
+			if p.Name != processName {
+				continue
+			}
+			if best == nil || p.CPUPercent > best.CPUPercent {
+				best = p
+			}
+		}
+		if best == nil {
+			// Process not present in this snapshot — skip.
+			continue
+		}
+
+		points = append(points, timelinePoint{
+			Timestamp:  int64(ts),
+			CPUPercent: math.Round(best.CPUPercent*100) / 100,
+			MemPercent: math.Round(best.MemPercent*100) / 100,
+			RSS:        best.RSS,
+			PID:        best.PID,
+		})
+	}
+
+	// Downsample to ~120 points if necessary.
+	if len(points) > 120 {
+		step := len(points) / 120
+		sampled := make([]timelinePoint, 0, 120)
+		for i := 0; i < len(points); i += step {
+			sampled = append(sampled, points[i])
+		}
+		points = sampled
+	}
+
+	return e.JSON(http.StatusOK, map[string]any{
+		"name":   processName,
+		"range":  rangeLabel,
+		"points": points,
+	})
 }
 
 // handleLatestMetricByType returns the latest metric data for a given agent and metric type.
