@@ -270,8 +270,13 @@ export function ServicesTab({ agentId }: ServicesTabProps) {
                   <td className="px-5 py-3 text-[var(--color-text-secondary)]">
                     {p.user}
                   </td>
-                  <td className="px-5 py-3 text-[var(--color-text-muted)] font-mono text-xs">
-                    <span className="truncate max-w-[300px] block">{p.command}</span>
+                  <td className="px-5 py-3 text-[var(--color-text-muted)] font-mono text-xs max-w-[300px]">
+                    <span
+                      className="truncate block cursor-help"
+                      title={p.command}
+                    >
+                      {p.command}
+                    </span>
                   </td>
                 </tr>
               ))}

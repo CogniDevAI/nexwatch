@@ -87,9 +87,9 @@ func (c *ProcessesCollector) Collect(ctx context.Context) (map[string]any, error
 		return infos[i].CPU > infos[j].CPU
 	})
 
-	// Limit to top 50.
-	if len(infos) > 50 {
-		infos = infos[:50]
+	// Limit to top 100.
+	if len(infos) > 100 {
+		infos = infos[:100]
 	}
 
 	// Convert to []map[string]any for JSON serialization.
@@ -108,6 +108,7 @@ func (c *ProcessesCollector) Collect(ctx context.Context) (map[string]any, error
 	}
 
 	log.Printf("[processes] collected %d processes (from %d total)", len(processes), len(procs))
+	_ = truncateStr // used in other collectors
 
 	return map[string]any{
 		"processes":   processes,
