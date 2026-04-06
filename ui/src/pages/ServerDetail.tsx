@@ -14,6 +14,11 @@ import {
   ListTree,
   Shield,
   ShieldAlert,
+  Server,
+  Database,
+  BarChart2,
+  Layers,
+  Box,
 } from "lucide-react";
 import pb from "@/lib/pocketbase";
 import type { Agent, MetricsResponse } from "@/types";
@@ -52,9 +57,46 @@ function emptyTimeSeries(): uPlot.AlignedData {
   return [[], []];
 }
 
+interface HardwareInfo {
+  cpu_logical?: number;
+  cpu_physical?: number;
+  total_ram?: number;
+  kernel?: string;
+  arch?: string;
+  uptime?: number;
+  load1?: number;
+  load5?: number;
+  load15?: number;
+  procs?: number;
+  platform?: string;
+  platform_version?: string;
+}
+
+/** Format seconds into a human-readable uptime string: "5d 3h", "2h 14m", "45m" */
+function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days >= 1) return `${days}d ${hours}h`;
+  if (hours >= 1) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+/** Format bytes into a human-readable string: "15.9 GB", "512 MB" */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) {
+    return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  }
+  if (bytes >= 1_048_576) {
+    return `${(bytes / 1_048_576).toFixed(0)} MB`;
+  }
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
+
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [hardware, setHardware] = useState<HardwareInfo | null>(null);
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("metrics");
   const [timeRange, setTimeRange] = useState("1h");
@@ -76,6 +118,19 @@ export function ServerDetail() {
       try {
         const record = await pb.collection("agents").getOne<Agent>(id!);
         setAgent(record);
+
+        // Fetch hardware info alongside agent data
+        try {
+          const hwResponse = await fetch(`/api/custom/agents/${id}/hardware`, {
+            headers: { Authorization: pb.authStore.token },
+          });
+          if (hwResponse.ok) {
+            const hwData = (await hwResponse.json()) as HardwareInfo;
+            setHardware(hwData);
+          }
+        } catch {
+          // Hardware data is optional — fail silently
+        }
       } catch {
         setAgent(null);
       } finally {
@@ -214,6 +269,7 @@ export function ServerDetail() {
                 {agent.status}
               </span>
             </div>
+            {/* Row 1: always shown — from agent record */}
             <div className="flex flex-wrap items-center gap-4 text-sm text-[var(--color-text-secondary)]">
               <span className="flex items-center gap-1.5">
                 <Globe className="w-3.5 h-3.5" />
@@ -221,7 +277,9 @@ export function ServerDetail() {
               </span>
               <span className="flex items-center gap-1.5">
                 <Cpu className="w-3.5 h-3.5" />
-                {agent.os || "Unknown OS"}
+                {hardware?.platform
+                  ? `${hardware.platform}${hardware.platform_version ? ` ${hardware.platform_version}` : ""}`
+                  : agent.os || "Unknown OS"}
               </span>
               <span className="flex items-center gap-1.5">
                 <HardDrive className="w-3.5 h-3.5" />
@@ -235,6 +293,57 @@ export function ServerDetail() {
                   : "Never"}
               </span>
             </div>
+
+            {/* Row 2: shown only when hardware data is available */}
+            {hardware && (
+              <div className="flex flex-wrap items-center gap-4 text-sm text-[var(--color-text-muted)] mt-1">
+                {hardware.kernel && (
+                  <span className="flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5" />
+                    {hardware.kernel}
+                  </span>
+                )}
+                {(hardware.cpu_logical ?? 0) > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <Cpu className="w-3.5 h-3.5" />
+                    {hardware.cpu_logical} cores
+                    {hardware.cpu_physical && hardware.cpu_physical !== hardware.cpu_logical
+                      ? ` (${hardware.cpu_physical} physical)`
+                      : ""}
+                  </span>
+                )}
+                {(hardware.total_ram ?? 0) > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5" />
+                    {formatBytes(hardware.total_ram!)}
+                  </span>
+                )}
+                {(hardware.uptime ?? 0) > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5" />
+                    {formatUptime(hardware.uptime!)}
+                  </span>
+                )}
+                {(hardware.load1 !== undefined) && (
+                  <span className="flex items-center gap-1.5">
+                    <BarChart2 className="w-3.5 h-3.5" />
+                    {hardware.load1.toFixed(2)} / {(hardware.load5 ?? 0).toFixed(2)} / {(hardware.load15 ?? 0).toFixed(2)}
+                  </span>
+                )}
+                {(hardware.procs ?? 0) > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5" />
+                    {hardware.procs} processes
+                  </span>
+                )}
+                {hardware.arch && (
+                  <span className="flex items-center gap-1.5">
+                    <Box className="w-3.5 h-3.5" />
+                    {hardware.arch}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

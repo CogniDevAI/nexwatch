@@ -64,6 +64,11 @@ func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service) {
 	router.GET("/api/custom/agents/{id}/vulnerabilities", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "vulnerabilities")
 	})
+
+	// GET /api/custom/agents/{id}/hardware — system hardware info from sysinfo, cpu, memory metrics
+	router.GET("/api/custom/agents/{id}/hardware", func(e *core.RequestEvent) error {
+		return handleHardware(e)
+	})
 }
 
 // handleDashboard returns a summary of all agents with their latest metrics.
@@ -685,6 +690,115 @@ func handleProcessTimeline(e *core.RequestEvent) error {
 		"range":  rangeLabel,
 		"points": points,
 	})
+}
+
+// handleHardware returns combined hardware information for an agent by reading the latest
+// sysinfo, cpu, and memory metric records. Missing metrics are silently omitted.
+func handleHardware(e *core.RequestEvent) error {
+	agentID := e.Request.PathValue("id")
+	if agentID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "agent ID is required",
+		})
+	}
+
+	// Verify agent exists.
+	_, err := e.App.FindRecordById("agents", agentID)
+	if err != nil {
+		return e.JSON(http.StatusNotFound, map[string]string{
+			"error": "agent not found",
+		})
+	}
+
+	type hardwareResponse struct {
+		CPULogical      int     `json:"cpu_logical,omitempty"`
+		CPUPhysical     int     `json:"cpu_physical,omitempty"`
+		TotalRAM        int64   `json:"total_ram,omitempty"`
+		Kernel          string  `json:"kernel,omitempty"`
+		Arch            string  `json:"arch,omitempty"`
+		Uptime          int64   `json:"uptime,omitempty"`
+		Load1           float64 `json:"load1,omitempty"`
+		Load5           float64 `json:"load5,omitempty"`
+		Load15          float64 `json:"load15,omitempty"`
+		Procs           int     `json:"procs,omitempty"`
+		Platform        string  `json:"platform,omitempty"`
+		PlatformVersion string  `json:"platform_version,omitempty"`
+	}
+
+	resp := hardwareResponse{}
+
+	// Helper to fetch latest metric data of a given type.
+	fetchLatest := func(metricType string) map[string]any {
+		records, err := e.App.FindRecordsByFilter(
+			"metrics",
+			"agent_id = {:agentId} && type = {:type}",
+			"-timestamp",
+			1,
+			0,
+			map[string]any{
+				"agentId": agentID,
+				"type":    metricType,
+			},
+		)
+		if err != nil || len(records) == 0 {
+			return nil
+		}
+		var data map[string]any
+		if err := json.Unmarshal([]byte(records[0].GetString("data")), &data); err != nil {
+			return nil
+		}
+		return data
+	}
+
+	// Extract sysinfo fields.
+	if sysinfo := fetchLatest("sysinfo"); sysinfo != nil {
+		if v, ok := sysinfo["kernel_version"].(string); ok {
+			resp.Kernel = v
+		}
+		if v, ok := sysinfo["arch"].(string); ok {
+			resp.Arch = v
+		}
+		if v, ok := toFloat(sysinfo["uptime"]); ok {
+			resp.Uptime = int64(v)
+		}
+		if v, ok := toFloat(sysinfo["load1"]); ok {
+			resp.Load1 = v
+		}
+		if v, ok := toFloat(sysinfo["load5"]); ok {
+			resp.Load5 = v
+		}
+		if v, ok := toFloat(sysinfo["load15"]); ok {
+			resp.Load15 = v
+		}
+		if v, ok := toFloat(sysinfo["procs"]); ok {
+			resp.Procs = int(v)
+		}
+		if v, ok := sysinfo["platform"].(string); ok {
+			resp.Platform = v
+		}
+		if v, ok := sysinfo["platform_version"].(string); ok {
+			resp.PlatformVersion = v
+		}
+	}
+
+	// Extract cpu fields.
+	if cpu := fetchLatest("cpu"); cpu != nil {
+		if v, ok := toFloat(cpu["logical_count"]); ok {
+			resp.CPULogical = int(v)
+		}
+		if v, ok := toFloat(cpu["physical_count"]); ok {
+			resp.CPUPhysical = int(v)
+		}
+	}
+
+	// Extract memory fields.
+	if memory := fetchLatest("memory"); memory != nil {
+		if v, ok := toFloat(memory["total"]); ok {
+			resp.TotalRAM = int64(v)
+		}
+	}
+
+	return e.JSON(http.StatusOK, resp)
 }
 
 // handleLatestMetricByType returns the latest metric data for a given agent and metric type.
