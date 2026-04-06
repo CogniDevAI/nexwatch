@@ -254,6 +254,8 @@ create_config() {
 
     if [ -f "${CONFIG_DIR}/agent.yaml" ]; then
         warn "Config already exists, preserving existing configuration"
+        chown nexwatch:nexwatch "${CONFIG_DIR}/agent.yaml" 2>/dev/null || true
+        chmod 600 "${CONFIG_DIR}/agent.yaml" 2>/dev/null || true
         return
     fi
 
@@ -276,6 +278,9 @@ collectors_enabled:
   - processes
   - hardening
   - vulnerabilities
+  - diskio
+  - connections
+  - services
 YAML
 
     chmod 600 "${CONFIG_DIR}/agent.yaml"
