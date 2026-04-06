@@ -9,6 +9,7 @@ import type { ProcessEntry } from "@/types";
 
 interface ProcessHistoryEntry {
   name: string;
+  cmd_fragment?: string;
   user: string;
   sample_count: number;
   avg_cpu: number;
@@ -365,7 +366,16 @@ function AuditView({ agentId }: { agentId: string }) {
                       } hover:bg-[var(--color-bg-elevated)]`}
                     >
                       <td className="px-5 py-3 font-medium text-[var(--color-text-primary)]">
-                        <span className="truncate max-w-[180px] block">{p.name}</span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="truncate max-w-[200px]">
+                            {p.cmd_fragment ? p.name.split(" (")[0] : p.name}
+                          </span>
+                          {p.cmd_fragment && (
+                            <span className="text-xs text-[var(--color-accent-cyan)] font-mono truncate max-w-[200px]">
+                              {p.cmd_fragment}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-5 py-3 text-[var(--color-text-secondary)]">{p.user}</td>
                       <td className="px-5 py-3 text-right">

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -456,6 +458,38 @@ func parseRangeParam(r string) (int64, string) {
 	}
 }
 
+// extractCmdKey returns a unique display key for a process.
+// For java processes it extracts the -jar filename so each JVM is tracked separately.
+// Examples: "java (bancacore-api.jar)", "java (bancacore-ms.jar)", "nginx"
+func extractCmdKey(name, cmdline string) string {
+	if name == "java" || strings.HasSuffix(name, "/java") {
+		// Look for -jar /path/to/something.jar
+		if idx := strings.Index(cmdline, "-jar "); idx >= 0 {
+			rest := strings.TrimSpace(cmdline[idx+5:])
+			fields := strings.Fields(rest)
+			if len(fields) > 0 {
+				return name + " (" + filepath.Base(fields[0]) + ")"
+			}
+		}
+		// Wildfly/JBoss standalone: look for jboss-modules.jar or standalone.xml
+		if strings.Contains(cmdline, "jboss-modules") || strings.Contains(cmdline, "wildfly") {
+			return name + " (wildfly)"
+		}
+	}
+	return name
+}
+
+// extractCmdFragment returns just the distinguishing part of a cmd key (e.g. "bancacore-api.jar").
+func extractCmdFragment(cmdKey string) string {
+	if start := strings.Index(cmdKey, "("); start >= 0 {
+		end := strings.Index(cmdKey, ")")
+		if end > start {
+			return cmdKey[start+1 : end]
+		}
+	}
+	return ""
+}
+
 // processSnapshot holds parsed process data from a single metrics record.
 type processEntry struct {
 	PID        int     `json:"pid"`
@@ -529,10 +563,11 @@ func handleProcessHistory(e *core.RequestEvent) error {
 			if p.Name == "" {
 				continue
 			}
-			s, ok := statsMap[p.Name]
+			key := extractCmdKey(p.Name, p.Cmdline)
+			s, ok := statsMap[key]
 			if !ok {
-				s = &processStats{name: p.Name}
-				statsMap[p.Name] = s
+				s = &processStats{name: key}
+				statsMap[key] = s
 			}
 			s.sampleCount++
 			s.cpuSum += p.CPUPercent
@@ -552,6 +587,7 @@ func handleProcessHistory(e *core.RequestEvent) error {
 
 	type resultEntry struct {
 		Name        string  `json:"name"`
+		CmdFragment string  `json:"cmd_fragment,omitempty"`
 		User        string  `json:"user"`
 		SampleCount int     `json:"sample_count"`
 		AvgCPU      float64 `json:"avg_cpu"`
@@ -562,14 +598,15 @@ func handleProcessHistory(e *core.RequestEvent) error {
 	}
 
 	results := make([]resultEntry, 0, len(statsMap))
-	for _, s := range statsMap {
+	for key, s := range statsMap {
 		var avgCPU, avgMem float64
 		if s.sampleCount > 0 {
 			avgCPU = math.Round(s.cpuSum/float64(s.sampleCount)*100) / 100
 			avgMem = math.Round(s.memSum/float64(s.sampleCount)*100) / 100
 		}
 		results = append(results, resultEntry{
-			Name:        s.name,
+			Name:        key,
+			CmdFragment: extractCmdFragment(key),
 			User:        s.user,
 			SampleCount: s.sampleCount,
 			AvgCPU:      avgCPU,
@@ -602,9 +639,17 @@ func handleProcessTimeline(e *core.RequestEvent) error {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "agent ID is required"})
 	}
 
+	// "name" param accepts either a plain name ("nginx") or a cmd_key ("java (bancacore-api.jar)").
 	processName := e.Request.URL.Query().Get("name")
 	if processName == "" {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "name param is required"})
+	}
+	// Extract the cmd_fragment if present (e.g. "bancacore-api.jar" from "java (bancacore-api.jar)").
+	cmdFragment := extractCmdFragment(processName)
+	// Plain process name without the fragment suffix for matching against p.Name.
+	baseName := processName
+	if idx := strings.Index(processName, " ("); idx >= 0 {
+		baseName = processName[:idx]
 	}
 
 	// Verify agent exists.
@@ -651,10 +696,14 @@ func handleProcessTimeline(e *core.RequestEvent) error {
 		}
 
 		// Find the process instance with the highest cpu_percent.
+		// If cmdFragment is set, match by cmdline content (e.g. "bancacore-api.jar").
 		var best *processEntry
 		for i := range snap.Processes {
 			p := &snap.Processes[i]
-			if p.Name != processName {
+			if p.Name != baseName {
+				continue
+			}
+			if cmdFragment != "" && !strings.Contains(p.Cmdline, cmdFragment) {
 				continue
 			}
 			if best == nil || p.CPUPercent > best.CPUPercent {
