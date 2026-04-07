@@ -19,6 +19,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache: false
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
@@ -34,6 +35,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache: false
 
       - name: Download Go modules
         run: go mod download
@@ -64,6 +66,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache: false
 
       - name: Download Go modules
         run: go mod download
