@@ -14,6 +14,7 @@ import (
 	"github.com/CogniDevAI/nexwatch/internal/hub/metrics"
 	"github.com/CogniDevAI/nexwatch/internal/hub/notify"
 	"github.com/CogniDevAI/nexwatch/internal/hub/notify/channels"
+	"github.com/CogniDevAI/nexwatch/internal/hub/threaddump"
 	"github.com/CogniDevAI/nexwatch/internal/hub/ws"
 
 	// Register PocketBase migrations.
@@ -38,6 +39,11 @@ func main() {
 		// Initialize WebSocket hub.
 		wsHub := ws.NewHub(app)
 		wsHub.SetMetricHandler(metricsSvc.IngestMetrics)
+
+		// Wire thread dump response handler.
+		tdSvc := threaddump.NewService(app)
+		wsHub.SetCommandResponseHandler(tdSvc.HandleResponse)
+
 		wsHub.StartHeartbeatChecker(90 * time.Second)
 
 		// Register WebSocket endpoint.
@@ -47,7 +53,7 @@ func main() {
 		})
 
 		// Register custom API routes.
-		api.RegisterRoutes(se, metricsSvc)
+		api.RegisterRoutes(se, metricsSvc, wsHub)
 
 		// Initialize notification service and register channel notifiers.
 		notifySvc := notify.NewService(app)

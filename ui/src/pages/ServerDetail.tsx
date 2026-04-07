@@ -20,6 +20,7 @@ import {
   Layers,
   Box,
   Monitor,
+  FileCode2,
 } from "lucide-react";
 import pb from "@/lib/pocketbase";
 import type { Agent, MetricsResponse } from "@/types";
@@ -32,8 +33,9 @@ import { ServicesTab } from "@/components/server/ServicesTab";
 import { HardeningTab } from "@/components/server/HardeningTab";
 import { VulnerabilitiesTab } from "@/components/server/VulnerabilitiesTab";
 import { SystemTab } from "@/components/server/SystemTab";
+import { ThreadDumpsTab } from "@/components/server/ThreadDumpsTab";
 
-type Tab = "metrics" | "docker" | "ports" | "system" | "services" | "hardening" | "vulnerabilities";
+type Tab = "metrics" | "docker" | "ports" | "system" | "services" | "hardening" | "vulnerabilities" | "threaddumps";
 
 const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "metrics", label: "Metrics", icon: Activity },
@@ -43,6 +45,7 @@ const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: "services", label: "Services", icon: ListTree },
   { key: "hardening", label: "Hardening", icon: Shield },
   { key: "vulnerabilities", label: "Vulns", icon: ShieldAlert },
+  { key: "threaddumps", label: "Thread Dumps", icon: FileCode2 },
 ];
 
 const METRICS_REFRESH_INTERVAL = 15_000;
@@ -448,6 +451,7 @@ export function ServerDetail() {
       {activeTab === "services" && id && <ServicesTab agentId={id} />}
       {activeTab === "hardening" && id && <HardeningTab agentId={id} />}
       {activeTab === "vulnerabilities" && id && <VulnerabilitiesTab agentId={id} />}
+      {activeTab === "threaddumps" && id && <ThreadDumpsTab agentId={id} />}
     </div>
   );
 }

@@ -2,6 +2,7 @@ package ws
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -22,6 +23,9 @@ var upgrader = websocket.Upgrader{
 
 // MetricHandler is called when a METRICS message is received from an agent.
 type MetricHandler func(app core.App, agentID string, payload *protocol.MetricsPayload)
+
+// CommandResponseHandler is called when a COMMAND_RESPONSE is received from an agent.
+type CommandResponseHandler func(app core.App, payload *protocol.CommandResponsePayload)
 
 // ConnectedAgent represents a connected WebSocket agent.
 type ConnectedAgent struct {
@@ -44,10 +48,11 @@ func (ca *ConnectedAgent) Send(msg *protocol.Message) error {
 
 // Hub manages all connected agents and routes messages.
 type Hub struct {
-	app           core.App
-	agents        sync.Map // map[string]*ConnectedAgent (agentID → conn)
-	metricHandler MetricHandler
-	stopCh        chan struct{}
+	app                    core.App
+	agents                 sync.Map // map[string]*ConnectedAgent (agentID → conn)
+	metricHandler          MetricHandler
+	commandResponseHandler CommandResponseHandler
+	stopCh                 chan struct{}
 }
 
 // NewHub creates a new WebSocket hub.
@@ -61,6 +66,25 @@ func NewHub(app core.App) *Hub {
 // SetMetricHandler registers the callback for metric messages.
 func (h *Hub) SetMetricHandler(fn MetricHandler) {
 	h.metricHandler = fn
+}
+
+// SetCommandResponseHandler registers the callback for command response messages.
+func (h *Hub) SetCommandResponseHandler(fn CommandResponseHandler) {
+	h.commandResponseHandler = fn
+}
+
+// SendCommand sends a COMMAND message to the agent identified by agentID.
+func (h *Hub) SendCommand(agentID string, payload *protocol.CommandPayload) error {
+	v, ok := h.agents.Load(agentID)
+	if !ok {
+		return fmt.Errorf("agent %s not connected", agentID)
+	}
+	ca := v.(*ConnectedAgent)
+	msg, err := protocol.NewMessage(protocol.MessageTypeCommand, payload)
+	if err != nil {
+		return err
+	}
+	return ca.Send(msg)
 }
 
 // ConnectedAgentCount returns the number of currently connected agents.
@@ -212,6 +236,9 @@ func (h *Hub) routeMessage(ca *ConnectedAgent, msg *protocol.Message) {
 	case protocol.MessageTypeHeartbeat:
 		h.handleHeartbeat(ca, msg)
 
+	case protocol.MessageTypeCommandResponse:
+		h.handleCommandResponse(ca, msg)
+
 	default:
 		log.Printf("[ws] agent %s sent unknown message type: %d", ca.ID, msg.Type)
 	}
@@ -268,6 +295,21 @@ func (h *Hub) handleMetrics(ca *ConnectedAgent, msg *protocol.Message) {
 
 	// Update last_seen.
 	h.updateLastSeen(ca.ID)
+}
+
+// handleCommandResponse processes COMMAND_RESPONSE messages from agents.
+func (h *Hub) handleCommandResponse(ca *ConnectedAgent, msg *protocol.Message) {
+	var payload protocol.CommandResponsePayload
+	if err := msg.DecodePayload(&payload); err != nil {
+		log.Printf("[ws] agent %s command response decode error: %v", ca.ID, err)
+		return
+	}
+	payload.AgentID = ca.ID
+	log.Printf("[ws] agent %s command response: cmd=%s req_id=%s err=%q", ca.ID, payload.Command, payload.RequestID, payload.Error)
+
+	if h.commandResponseHandler != nil {
+		h.commandResponseHandler(h.app, &payload)
+	}
 }
 
 // handleHeartbeat processes HEARTBEAT messages from agents.

@@ -16,10 +16,18 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/CogniDevAI/nexwatch/internal/hub/metrics"
+	"github.com/CogniDevAI/nexwatch/internal/hub/threaddump"
+	"github.com/CogniDevAI/nexwatch/internal/shared/protocol"
 )
 
+// CommandSender can send a command to a connected agent.
+type CommandSender interface {
+	SendCommand(agentID string, payload *protocol.CommandPayload) error
+}
+
 // RegisterRoutes registers all custom API routes on the PocketBase router.
-func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service) {
+func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service, cmdSender CommandSender) {
+	tdSvc := threaddump.NewService(se.App)
 	router := se.Router
 
 	// GET /api/custom/dashboard — agent summaries with latest metrics
@@ -85,6 +93,21 @@ func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service) {
 	// GET /api/custom/agents/{id}/hardware — system hardware info from sysinfo, cpu, memory metrics
 	router.GET("/api/custom/agents/{id}/hardware", func(e *core.RequestEvent) error {
 		return handleHardware(e)
+	})
+
+	// POST /api/custom/agents/{id}/thread-dump — request a thread dump for a PID
+	router.POST("/api/custom/agents/{id}/thread-dump", func(e *core.RequestEvent) error {
+		return handleRequestThreadDump(e, tdSvc, cmdSender)
+	})
+
+	// GET /api/custom/agents/{id}/thread-dumps — list historical thread dumps
+	router.GET("/api/custom/agents/{id}/thread-dumps", func(e *core.RequestEvent) error {
+		return handleListThreadDumps(e)
+	})
+
+	// GET /api/custom/thread-dumps/{dumpId} — get a single thread dump by ID
+	router.GET("/api/custom/thread-dumps/{dumpId}", func(e *core.RequestEvent) error {
+		return handleGetThreadDump(e)
 	})
 }
 
@@ -949,4 +972,96 @@ func handleLatestMetricByType(e *core.RequestEvent, metricType string) error {
 	e.Response.Header().Set("Content-Type", "application/json")
 	_, writeErr := e.Response.Write(data)
 	return writeErr
+}
+
+// ─── Thread Dump handlers ──────────────────────────────────────────────────────
+
+// handleRequestThreadDump triggers a thread dump for a given PID on an agent.
+func handleRequestThreadDump(e *core.RequestEvent, tdSvc *threaddump.Service, sender CommandSender) error {
+	agentID := e.Request.PathValue("id")
+
+	var body struct {
+		PID         int    `json:"pid"`
+		ProcessName string `json:"process_name"`
+	}
+	if err := json.NewDecoder(e.Request.Body).Decode(&body); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	}
+	if body.PID == 0 {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "pid is required"})
+	}
+
+	requestID, err := tdSvc.RequestDump(agentID, body.PID, body.ProcessName, sender.SendCommand)
+	if err != nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+	}
+
+	return e.JSON(http.StatusAccepted, map[string]string{
+		"request_id": requestID,
+		"status":     "pending",
+	})
+}
+
+// handleListThreadDumps returns the dump history for an agent.
+func handleListThreadDumps(e *core.RequestEvent) error {
+	agentID := e.Request.PathValue("id")
+
+	records, err := e.App.FindRecordsByFilter(
+		"thread_dumps",
+		"agent_id = {:agentId}",
+		"-taken_at", 50, 0,
+		map[string]any{"agentId": agentID},
+	)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to fetch thread dumps"})
+	}
+
+	type dumpSummary struct {
+		ID          string `json:"id"`
+		PID         int    `json:"pid"`
+		ProcessName string `json:"process_name"`
+		RequestID   string `json:"request_id"`
+		Status      string `json:"status"`
+		Error       string `json:"error,omitempty"`
+		TakenAt     string `json:"taken_at"`
+	}
+
+	items := make([]dumpSummary, 0, len(records))
+	for _, r := range records {
+		items = append(items, dumpSummary{
+			ID:          r.Id,
+			PID:         int(r.GetFloat("pid")),
+			ProcessName: r.GetString("process_name"),
+			RequestID:   r.GetString("request_id"),
+			Status:      r.GetString("status"),
+			Error:       r.GetString("error"),
+			TakenAt:     r.GetString("taken_at"),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]any{
+		"dumps": items,
+		"total": len(items),
+	})
+}
+
+// handleGetThreadDump returns the full output of a single dump.
+func handleGetThreadDump(e *core.RequestEvent) error {
+	dumpID := e.Request.PathValue("dumpId")
+
+	record, err := e.App.FindRecordById("thread_dumps", dumpID)
+	if err != nil {
+		return e.JSON(http.StatusNotFound, map[string]string{"error": "dump not found"})
+	}
+
+	return e.JSON(http.StatusOK, map[string]any{
+		"id":           record.Id,
+		"pid":          int(record.GetFloat("pid")),
+		"process_name": record.GetString("process_name"),
+		"request_id":   record.GetString("request_id"),
+		"status":       record.GetString("status"),
+		"output":       record.GetString("output"),
+		"error":        record.GetString("error"),
+		"taken_at":     record.GetString("taken_at"),
+	})
 }

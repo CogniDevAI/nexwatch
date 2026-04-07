@@ -20,6 +20,8 @@ const (
 	MessageTypeCommand
 	// MessageTypeAck acknowledges receipt of a message.
 	MessageTypeAck
+	// MessageTypeCommandResponse carries the result of a command back to the hub.
+	MessageTypeCommandResponse
 )
 
 // String returns the human-readable name of a MessageType.
@@ -35,6 +37,8 @@ func (mt MessageType) String() string {
 		return "COMMAND"
 	case MessageTypeAck:
 		return "ACK"
+	case MessageTypeCommandResponse:
+		return "COMMAND_RESPONSE"
 	default:
 		return "UNKNOWN"
 	}
@@ -117,4 +121,14 @@ type CommandPayload struct {
 type AckPayload struct {
 	MessageTimestamp int64  `msgpack:"ref"`
 	Status           string `msgpack:"status"`
+}
+
+// CommandResponsePayload carries the result of a hub-initiated command.
+type CommandResponsePayload struct {
+	Command   string `msgpack:"cmd"`
+	RequestID string `msgpack:"req_id"`
+	AgentID   string `msgpack:"agent_id"`
+	PID       int    `msgpack:"pid,omitempty"`
+	Output    string `msgpack:"output"`
+	Error     string `msgpack:"error,omitempty"`
 }

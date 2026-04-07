@@ -15,6 +15,7 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 
 	"github.com/CogniDevAI/nexwatch/internal/agent/collector"
+	"github.com/CogniDevAI/nexwatch/internal/agent/command"
 	"github.com/CogniDevAI/nexwatch/internal/agent/config"
 	"github.com/CogniDevAI/nexwatch/internal/agent/transport"
 	"github.com/CogniDevAI/nexwatch/internal/shared/protocol"
@@ -88,6 +89,7 @@ func main() {
 			var cmd protocol.CommandPayload
 			if err := msg.DecodePayload(&cmd); err == nil {
 				log.Printf("[agent] COMMAND received: %s", cmd.Command)
+				go handleCommand(ctx, ws, cmd)
 			}
 		default:
 			log.Printf("[agent] received message type=%s", msg.Type)
@@ -297,4 +299,58 @@ func getOutboundIP() string {
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP.String()
+}
+
+// handleCommand dispatches a COMMAND message from the hub to the appropriate handler.
+func handleCommand(ctx context.Context, ws *transport.WSTransport, cmd protocol.CommandPayload) {
+	switch cmd.Command {
+	case "thread_dump":
+		handleThreadDump(ctx, ws, cmd)
+	default:
+		log.Printf("[agent] unknown command: %s", cmd.Command)
+	}
+}
+
+// handleThreadDump executes jstack for the requested PID and sends the result back.
+func handleThreadDump(ctx context.Context, ws *transport.WSTransport, cmd protocol.CommandPayload) {
+	requestID, _ := cmd.Args["request_id"].(string)
+
+	// Extract PID — msgpack decodes numbers as int64 or float64.
+	var pid int
+	switch v := cmd.Args["pid"].(type) {
+	case int:
+		pid = v
+	case int64:
+		pid = int(v)
+	case float64:
+		pid = int(v)
+	}
+
+	processName, _ := cmd.Args["process_name"].(string)
+	log.Printf("[agent] thread dump requested: pid=%d process=%s req=%s", pid, processName, requestID)
+
+	resp := &protocol.CommandResponsePayload{
+		Command:   "thread_dump",
+		RequestID: requestID,
+		PID:       pid,
+	}
+
+	output, err := command.ThreadDump(ctx, pid)
+	if err != nil {
+		resp.Error = err.Error()
+		log.Printf("[agent] thread dump failed: pid=%d err=%v", pid, err)
+	} else {
+		resp.Output = output
+		log.Printf("[agent] thread dump success: pid=%d bytes=%d", pid, len(output))
+	}
+
+	msg, err := protocol.NewMessage(protocol.MessageTypeCommandResponse, resp)
+	if err != nil {
+		log.Printf("[agent] failed to encode thread dump response: %v", err)
+		return
+	}
+
+	if err := ws.Send(msg); err != nil {
+		log.Printf("[agent] failed to send thread dump response: %v", err)
+	}
 }
