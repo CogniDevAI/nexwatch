@@ -340,9 +340,7 @@ ReadWritePaths=${CONFIG_DIR}
 PrivateTmp=true
 ${DOCKER_GROUP_LINE}
 
-# Allow reading /proc and /sys for metric collectors (diskio, connections, services)
-ProtectProc=invisible
-ProcSubset=all
+# Allow reading /proc and /sys for metric collectors (diskio, connections, processes)
 ReadOnlyPaths=/proc /sys
 
 # Logging
