@@ -23,7 +23,7 @@ interface DiskIOData {
 
 interface PortCount {
   port: number;
-  established: number;
+  established_count: number;
 }
 
 interface ConnectionsData {
@@ -34,7 +34,9 @@ interface ConnectionsData {
 
 interface SystemdService {
   name: string;
-  state: string;
+  sub: string;      // running | failed | dead | exited | etc.
+  active: string;   // active | activating | inactive | failed
+  load: string;
   description: string;
 }
 
@@ -133,7 +135,7 @@ function DiskIOSection({ data }: { data: DiskIOData }) {
 function ConnectionsSection({ data }: { data: ConnectionsData }) {
   const summary = data.summary ?? {};
   const byPort = useMemo(
-    () => [...(data.by_port ?? [])].sort((a, b) => b.established - a.established).slice(0, 20),
+    () => [...(data.by_port ?? [])].sort((a, b) => b.established_count - a.established_count).slice(0, 20),
     [data.by_port],
   );
 
@@ -210,17 +212,17 @@ function ConnectionsSection({ data }: { data: ConnectionsData }) {
                   <tbody className="divide-y divide-[var(--color-border-muted)]">
                     {byPort.map((p, idx) => (
                       <tr
-                        key={p.port}
+                         key={`${p.port}-${idx}`}
                         className={`transition-colors ${
                           idx % 2 === 0 ? "bg-transparent" : "bg-[var(--color-bg-elevated)]/30"
                         } hover:bg-[var(--color-bg-elevated)]`}
-                      >
-                        <td className="px-5 py-3 font-medium text-[var(--color-text-primary)] tabular-nums">
-                          {p.port}
-                        </td>
-                        <td className="px-5 py-3 text-right tabular-nums text-[var(--color-accent-green)]">
-                          {p.established}
-                        </td>
+                       >
+                         <td className="px-5 py-3 font-medium text-[var(--color-text-primary)] tabular-nums">
+                           {p.port}
+                         </td>
+                         <td className="px-5 py-3 text-right tabular-nums text-[var(--color-accent-green)]">
+                           {p.established_count}
+                         </td>
                       </tr>
                     ))}
                   </tbody>
@@ -237,7 +239,7 @@ function ConnectionsSection({ data }: { data: ConnectionsData }) {
 // ─── Services Section ─────────────────────────────────────────────────────────
 
 function ServiceStateBadge({ state }: { state: string }) {
-  const normalized = state.toLowerCase();
+  const normalized = (state ?? "").toLowerCase();
   let classes: string;
 
   if (normalized === "running" || normalized === "active") {
@@ -262,12 +264,12 @@ function ServicesSection({ data }: { data: ServicesData }) {
     const services = data.services ?? [];
     return [...services].sort((a, b) => {
       const order = (s: string) => {
-        const n = s.toLowerCase();
+        const n = (s ?? "").toLowerCase();
         if (n === "failed") return 0;
         if (n === "running" || n === "active") return 1;
         return 2;
       };
-      return order(a.state) - order(b.state);
+      return order(a.sub) - order(b.sub);
     });
   }, [data.services]);
 
@@ -277,8 +279,8 @@ function ServicesSection({ data }: { data: ServicesData }) {
     return sorted.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q) ||
-        s.state.toLowerCase().includes(q),
+        (s.description ?? "").toLowerCase().includes(q) ||
+        (s.sub ?? "").toLowerCase().includes(q),
     );
   }, [sorted, search]);
 
@@ -352,7 +354,7 @@ function ServicesSection({ data }: { data: ServicesData }) {
                     </span>
                   </td>
                   <td className="px-5 py-3">
-                    <ServiceStateBadge state={svc.state} />
+                    <ServiceStateBadge state={svc.sub ?? svc.active ?? ""} />
                   </td>
                   <td className="px-5 py-3 text-[var(--color-text-secondary)] max-w-[400px]">
                     <span className="truncate block" title={svc.description}>
