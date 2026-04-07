@@ -30,5 +30,10 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 
+# Allow reading /proc and /sys for metric collectors (diskio, connections, services)
+ProtectProc=invisible
+ProcSubset=all
+ReadOnlyPaths=/proc /sys
+
 [Install]
 WantedBy=multi-user.target
