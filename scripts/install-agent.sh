@@ -359,7 +359,14 @@ UNIT
 enable_and_start() {
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
-    systemctl start "$SERVICE_NAME"
+
+    # Always restart so the new binary and unit take effect immediately.
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        info "Restarting ${SERVICE_NAME} to apply new binary..."
+        systemctl restart "$SERVICE_NAME"
+    else
+        systemctl start "$SERVICE_NAME"
+    fi
 
     # Brief pause then check status.
     sleep 2
