@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -42,8 +43,10 @@ func isVirtualDevice(name string) bool {
 func (c *DiskIOCollector) Collect(ctx context.Context) (map[string]any, error) {
 	counters, err := disk.IOCountersWithContext(ctx)
 	if err != nil {
+		log.Printf("[diskio] IOCounters error: %v", err)
 		return nil, err
 	}
+	log.Printf("[diskio] collected %d devices", len(counters))
 
 	now := time.Now()
 
@@ -60,12 +63,12 @@ func (c *DiskIOCollector) Collect(ctx context.Context) (map[string]any, error) {
 		}
 
 		entry := map[string]any{
-			"name":               name,
-			"reads_per_sec":      0.0,
-			"writes_per_sec":     0.0,
-			"read_bytes_per_sec": 0.0,
+			"name":                name,
+			"reads_per_sec":       0.0,
+			"writes_per_sec":      0.0,
+			"read_bytes_per_sec":  0.0,
 			"write_bytes_per_sec": 0.0,
-			"io_time_ms":         cur.IoTime,
+			"io_time_ms":          cur.IoTime,
 		}
 
 		if prev != nil {

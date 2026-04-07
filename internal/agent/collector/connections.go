@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strings"
 
@@ -23,8 +24,20 @@ func (c *ConnectionsCollector) Name() string { return "connections" }
 func (c *ConnectionsCollector) Collect(ctx context.Context) (map[string]any, error) {
 	conns, err := psnet.ConnectionsWithContext(ctx, "tcp")
 	if err != nil {
-		return nil, err
+		log.Printf("[connections] psnet error: %v", err)
+		// Return empty summary instead of failing — agent may lack /proc/net/tcp access.
+		return map[string]any{
+			"summary": map[string]int{
+				"established": 0, "time_wait": 0, "close_wait": 0,
+				"listen": 0, "syn_sent": 0, "syn_recv": 0,
+				"fin_wait1": 0, "fin_wait2": 0, "last_ack": 0,
+				"closing": 0, "other": 0,
+			},
+			"total":   0,
+			"by_port": []map[string]any{},
+		}, nil
 	}
+	log.Printf("[connections] collected %d TCP connections", len(conns))
 
 	// Normalise state strings to lowercase for consistent matching.
 	stateCount := make(map[string]int)
@@ -112,8 +125,8 @@ func (c *ConnectionsCollector) Collect(ctx context.Context) (map[string]any, err
 	}
 
 	return map[string]any{
-		"summary":  summary,
-		"total":    len(conns),
-		"by_port":  byPort,
+		"summary": summary,
+		"total":   len(conns),
+		"by_port": byPort,
 	}, nil
 }

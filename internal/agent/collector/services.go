@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"log"
 	"os/exec"
 	"strings"
 )
@@ -33,6 +34,7 @@ func (c *ServicesCollector) Collect(ctx context.Context) (map[string]any, error)
 	out, err := cmd.Output()
 	if err != nil {
 		// systemctl may not be present (e.g. macOS). Return empty rather than error.
+		log.Printf("[services] systemctl error: %v", err)
 		return map[string]any{
 			"services": []map[string]any{},
 			"total":    0,
@@ -41,6 +43,7 @@ func (c *ServicesCollector) Collect(ctx context.Context) (map[string]any, error)
 			"other":    0,
 		}, nil
 	}
+	log.Printf("[services] systemctl output: %d bytes", len(out))
 
 	type serviceEntry struct {
 		Name        string `json:"name"`
@@ -61,20 +64,29 @@ func (c *ServicesCollector) Collect(ctx context.Context) (map[string]any, error)
 			continue
 		}
 
-		// Fields: UNIT LOAD ACTIVE SUB DESCRIPTION...
-		// Fields are whitespace-separated; description may contain spaces.
+		// Fields: [●] UNIT LOAD ACTIVE SUB DESCRIPTION...
+		// systemctl may prefix lines with a status bullet (●, ✗, etc.) — strip it.
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			continue
 		}
 
-		unit := fields[0]
-		load := fields[1]
-		active := fields[2]
-		sub := fields[3]
+		// If first field doesn't end in .service, it's a bullet — shift fields.
+		offset := 0
+		if !strings.HasSuffix(fields[0], ".service") {
+			offset = 1
+		}
+		if len(fields) < offset+4 {
+			continue
+		}
+
+		unit := fields[offset]
+		load := fields[offset+1]
+		active := fields[offset+2]
+		sub := fields[offset+3]
 		description := ""
-		if len(fields) > 4 {
-			description = strings.Join(fields[4:], " ")
+		if len(fields) > offset+4 {
+			description = strings.Join(fields[offset+4:], " ")
 		}
 
 		// Skip inactive services.
