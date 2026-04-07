@@ -32,11 +32,19 @@ func (c *OracleCollector) Name() string { return "oracle" }
 
 // Collect runs all Oracle queries and returns the combined result.
 func (c *OracleCollector) Collect(ctx context.Context) (map[string]any, error) {
+	if c.oracleHome == "" {
+		return nil, fmt.Errorf("oracle_home is not configured")
+	}
+	if c.oracleSID == "" {
+		return nil, fmt.Errorf("oracle_sid is not configured")
+	}
+	log.Printf("[oracle] collecting from SID=%s HOME=%s", c.oracleSID, c.oracleHome)
 	script := buildScript()
 	out, err := c.runSqlplus(ctx, script)
 	if err != nil {
 		return nil, fmt.Errorf("sqlplus error: %w", err)
 	}
+	log.Printf("[oracle] collected %d bytes of output", len(out))
 	return parseOutput(out), nil
 }
 

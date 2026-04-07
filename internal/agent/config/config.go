@@ -133,6 +133,22 @@ func Load() *Config {
 		log.Printf("[config] unmarshal error: %v", err)
 	}
 
+	// Debug oracle config.
+	if cfg.OracleHome != "" || cfg.OracleSID != "" {
+		log.Printf("[config] oracle_home=%s oracle_sid=%s", cfg.OracleHome, cfg.OracleSID)
+	} else {
+		// Try reading directly from koanf in case struct tags didn't map.
+		if v := k.String("oracle_home"); v != "" {
+			cfg.OracleHome = v
+		}
+		if v := k.String("oracle_sid"); v != "" {
+			cfg.OracleSID = v
+		}
+		if cfg.OracleHome != "" {
+			log.Printf("[config] oracle_home=%s oracle_sid=%s (recovered from koanf)", cfg.OracleHome, cfg.OracleSID)
+		}
+	}
+
 	// Handle interval: koanf may load it as an int (seconds) from flags/env.
 	if raw := k.Get("interval"); raw != nil {
 		switch v := raw.(type) {
