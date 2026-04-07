@@ -85,31 +85,31 @@ SET PAGESIZE 0 FEEDBACK OFF VERIFY OFF HEADING OFF ECHO OFF LINESIZE 4000 TRIMSP
 SET COLSEP '|'
 SET NUMFORMAT 99999999999
 
--- SECTION:instance
+PROMPT SECTION:instance
 SELECT instance_name||'|'||status||'|'||database_status||'|'||host_name||'|'||
        TO_CHAR(startup_time,'YYYY-MM-DD HH24:MI:SS')||'|'||version
 FROM v$instance;
 
--- SECTION:sessions
+PROMPT SECTION:sessions
 SELECT
-  COUNT(*) total,
-  SUM(CASE WHEN status='ACTIVE' THEN 1 ELSE 0 END) active,
-  SUM(CASE WHEN status='INACTIVE' THEN 1 ELSE 0 END) inactive,
-  SUM(CASE WHEN wait_class='Idle' THEN 0 ELSE 1 END) waiting,
-  SUM(CASE WHEN blocking_session IS NOT NULL THEN 1 ELSE 0 END) blocked
+  COUNT(*)||'|'||
+  SUM(CASE WHEN status='ACTIVE' THEN 1 ELSE 0 END)||'|'||
+  SUM(CASE WHEN status='INACTIVE' THEN 1 ELSE 0 END)||'|'||
+  SUM(CASE WHEN wait_class='Idle' THEN 0 ELSE 1 END)||'|'||
+  SUM(CASE WHEN blocking_session IS NOT NULL THEN 1 ELSE 0 END)
 FROM v$session
 WHERE type='USER';
 
--- SECTION:blocked_sessions
+PROMPT SECTION:blocked_sessions
 SELECT s.sid||'|'||s.serial#||'|'||s.username||'|'||s.status||'|'||
-       s.blocking_session||'|'||s.wait_class||'|'||s.event||'|'||s.seconds_in_wait||'|'||
-       SUBSTR(q.sql_text,1,200)
+       NVL(TO_CHAR(s.blocking_session),'0')||'|'||s.wait_class||'|'||s.event||'|'||s.seconds_in_wait||'|'||
+       SUBSTR(NVL(q.sql_text,''),1,200)
 FROM v$session s
 LEFT JOIN v$sql q ON s.sql_id = q.sql_id AND s.sql_child_number = q.child_number
 WHERE s.blocking_session IS NOT NULL AND s.type='USER'
 FETCH FIRST 20 ROWS ONLY;
 
--- SECTION:top_sql
+PROMPT SECTION:top_sql
 SELECT sql_id||'|'||executions||'|'||
        ROUND(elapsed_time/1000000,2)||'|'||
        ROUND(elapsed_time/NULLIF(executions,0)/1000000,4)||'|'||
@@ -121,7 +121,7 @@ WHERE executions > 0
 ORDER BY elapsed_time DESC
 FETCH FIRST 15 ROWS ONLY;
 
--- SECTION:tablespaces
+PROMPT SECTION:tablespaces
 SELECT t.tablespace_name||'|'||
        ROUND(m.used_space*8192/1024/1024,2)||'|'||
        ROUND(m.tablespace_size*8192/1024/1024,2)||'|'||
@@ -131,25 +131,25 @@ FROM dba_tablespace_usage_metrics m
 JOIN dba_tablespaces t ON t.tablespace_name = m.tablespace_name
 ORDER BY m.used_percent DESC;
 
--- SECTION:sga
+PROMPT SECTION:sga
 SELECT name||'|'||ROUND(bytes/1024/1024,2) FROM v$sgainfo ORDER BY name;
 
--- SECTION:pga
+PROMPT SECTION:pga
 SELECT name||'|'||ROUND(value/1024/1024,2) FROM v$pgastat
 WHERE name IN ('total PGA inuse','total PGA allocated','maximum PGA allocated','aggregate PGA target parameter');
 
--- SECTION:waits
+PROMPT SECTION:waits
 SELECT event||'|'||total_waits||'|'||ROUND(time_waited/100,2)||'|'||wait_class
 FROM v$system_event
 WHERE wait_class != 'Idle' AND total_waits > 0
 ORDER BY time_waited DESC
 FETCH FIRST 15 ROWS ONLY;
 
--- SECTION:locks
+PROMPT SECTION:locks
 SELECT l.sid||'|'||s.username||'|'||l.type||'|'||
        DECODE(l.lmode,0,'None',1,'Null',2,'Row-S',3,'Row-X',4,'Share',5,'S/Row-X',6,'Exclusive')||'|'||
        DECODE(l.request,0,'None',1,'Null',2,'Row-S',3,'Row-X',4,'Share',5,'S/Row-X',6,'Exclusive')||'|'||
-       l.ctime||'|'||o.object_name
+       l.ctime||'|'||NVL(o.object_name,'')
 FROM v$lock l
 JOIN v$session s ON s.sid = l.sid
 LEFT JOIN dba_objects o ON o.object_id = l.id1
@@ -157,8 +157,8 @@ WHERE l.type IN ('TM','TX') AND s.type='USER'
 ORDER BY l.ctime DESC
 FETCH FIRST 20 ROWS ONLY;
 
--- SECTION:redo
-SELECT ROUND(SUM(blocks*block_size)/1024/1024,2) redo_mb_written FROM v$archived_log
+PROMPT SECTION:redo
+SELECT ROUND(NVL(SUM(blocks*block_size),0)/1024/1024,2) FROM v$archived_log
 WHERE first_time >= SYSDATE - 1/24 AND standby_dest='NO';
 
 EXIT;
@@ -173,12 +173,13 @@ func parseOutput(raw string) map[string]any {
 	current := ""
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "-- SECTION:") {
-			current = strings.TrimPrefix(line, "-- SECTION:")
+		// PROMPT outputs the text directly — match "SECTION:<name>"
+		if strings.HasPrefix(line, "SECTION:") {
+			current = strings.TrimPrefix(line, "SECTION:")
 			sections[current] = []string{}
 			continue
 		}
-		if current != "" && line != "" && !strings.HasPrefix(line, "ERROR") {
+		if current != "" && line != "" && !strings.HasPrefix(line, "ERROR") && !strings.HasPrefix(line, "ORA-") {
 			sections[current] = append(sections[current], line)
 		}
 	}
