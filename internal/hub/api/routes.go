@@ -95,6 +95,11 @@ func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service, cmdSender 
 		return handleHardware(e)
 	})
 
+	// GET /api/custom/agents/{id}/oracle — latest Oracle metrics for an agent
+	router.GET("/api/custom/agents/{id}/oracle", func(e *core.RequestEvent) error {
+		return handleLatestMetricByType(e, "oracle")
+	})
+
 	// POST /api/custom/agents/{id}/thread-dump — request a thread dump for a PID
 	router.POST("/api/custom/agents/{id}/thread-dump", func(e *core.RequestEvent) error {
 		return handleRequestThreadDump(e, tdSvc, cmdSender)
@@ -945,6 +950,7 @@ func handleLatestMetricByType(e *core.RequestEvent, metricType string) error {
 			"diskio":          `{"devices":[]}`,
 			"connections":     `{"summary":{},"total":0,"by_port":[]}`,
 			"services":        `{"services":[],"total":0,"running":0,"failed":0,"other":0}`,
+			"oracle":          `{"instance":{},"sessions":{},"blocked_sessions":[],"top_sql":[],"tablespaces":[],"sga":{},"pga":{},"waits":[],"locks":[]}`,
 		}
 		empty, ok := emptyResponses[metricType]
 		if !ok {

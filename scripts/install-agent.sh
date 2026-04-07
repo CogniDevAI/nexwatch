@@ -3,10 +3,13 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | sh -s -- --hub ws://hub:8090/ws/agent --token TOKEN
 #
 # Environment variables (alternative to flags):
-#   HUB_URL   - Hub WebSocket URL (e.g. ws://hub:8090/ws/agent)
-#   TOKEN     - Agent authentication token
-#   VERSION   - Agent version to install (default: latest)
-#   INTERVAL  - Collection interval in seconds (default: 10)
+#   HUB_URL      - Hub WebSocket URL (e.g. ws://hub:8090/ws/agent)
+#   TOKEN        - Agent authentication token
+#   VERSION      - Agent version to install (default: latest)
+#   INTERVAL     - Collection interval in seconds (default: 10)
+#   MODE         - Agent mode: standard (default) or oracle
+#   ORACLE_HOME  - Oracle Home path (oracle mode only)
+#   ORACLE_SID   - Oracle SID (oracle mode only)
 
 set -eu
 
@@ -23,6 +26,13 @@ HUB_URL="${HUB_URL:-}"
 TOKEN="${TOKEN:-}"
 VERSION="${VERSION:-latest}"
 INTERVAL="${INTERVAL:-10}"
+MODE="${MODE:-standard}"
+ORACLE_HOME="${ORACLE_HOME:-}"
+ORACLE_SID="${ORACLE_SID:-}"
+
+# Service user/group — set by create_user based on MODE.
+SERVICE_USER="nexwatch"
+SERVICE_GROUP="nexwatch"
 
 # Temp directory — set early so cleanup trap can reference it.
 TMP_DIR=""
@@ -66,6 +76,18 @@ while [ $# -gt 0 ]; do
             INTERVAL="$2"
             shift 2
             ;;
+        --mode)
+            MODE="$2"
+            shift 2
+            ;;
+        --oracle-home)
+            ORACLE_HOME="$2"
+            shift 2
+            ;;
+        --oracle-sid)
+            ORACLE_SID="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "NexWatch Agent Installer"
             echo ""
@@ -73,14 +95,17 @@ while [ $# -gt 0 ]; do
             echo "  install-agent.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --hub URL        Hub WebSocket URL (required)"
-            echo "  --token TOKEN    Agent authentication token (required)"
-            echo "  --version VER    Agent version (default: latest)"
-            echo "  --interval SECS  Collection interval in seconds (default: 10)"
-            echo "  --help           Show this help"
+            echo "  --hub URL           Hub WebSocket URL (required)"
+            echo "  --token TOKEN       Agent authentication token (required)"
+            echo "  --version VER       Agent version (default: latest)"
+            echo "  --interval SECS     Collection interval in seconds (default: 10)"
+            echo "  --mode MODE         Agent mode: standard (default) or oracle"
+            echo "  --oracle-home PATH  Oracle Home path (oracle mode)"
+            echo "  --oracle-sid SID    Oracle SID (oracle mode)"
+            echo "  --help              Show this help"
             echo ""
             echo "Environment variables:"
-            echo "  HUB_URL, TOKEN, VERSION, INTERVAL"
+            echo "  HUB_URL, TOKEN, VERSION, INTERVAL, MODE, ORACLE_HOME, ORACLE_SID"
             exit 0
             ;;
         *)
@@ -227,6 +252,27 @@ download_binary() {
 
 # --- Create system user ---
 create_user() {
+    if [ "$MODE" = "oracle" ]; then
+        # Oracle mode: run as existing 'oracle' OS user (member of dba group).
+        if id oracle > /dev/null 2>&1; then
+            info "Oracle mode: using existing 'oracle' OS user"
+            SERVICE_USER="oracle"
+            SERVICE_GROUP="oinstall"
+            # Ensure oracle is in dba group for sqlplus OS auth.
+            if getent group dba > /dev/null 2>&1; then
+                if ! id -nG oracle | grep -qw dba; then
+                    usermod -aG dba oracle
+                fi
+            fi
+        else
+            error "Oracle mode requires an existing 'oracle' OS user. Is Oracle installed?"
+        fi
+        return
+    fi
+
+    # Standard mode: create dedicated nexwatch user.
+    SERVICE_USER="nexwatch"
+    SERVICE_GROUP="nexwatch"
     if id nexwatch > /dev/null 2>&1; then
         info "System user 'nexwatch' already exists"
     else
@@ -252,13 +298,19 @@ create_user() {
 create_config() {
     mkdir -p "$CONFIG_DIR"
 
-    # Full list of collectors shipped with this version.
-    ALL_COLLECTORS="cpu memory disk network sysinfo docker ports processes hardening vulnerabilities diskio connections services"
+    # Collector lists per mode.
+    STANDARD_COLLECTORS="cpu memory disk network sysinfo docker ports processes hardening vulnerabilities diskio connections services"
+    ORACLE_COLLECTORS="cpu memory disk network sysinfo processes diskio connections services oracle"
+
+    if [ "$MODE" = "oracle" ]; then
+        ALL_COLLECTORS="$ORACLE_COLLECTORS"
+    else
+        ALL_COLLECTORS="$STANDARD_COLLECTORS"
+    fi
 
     if [ -f "${CONFIG_DIR}/agent.yaml" ]; then
         info "Config already exists, merging new collectors..."
 
-        # Add any collector that is missing from the existing config.
         added=""
         for col in $ALL_COLLECTORS; do
             if ! grep -q "^\s*-\s*${col}\s*$" "${CONFIG_DIR}/agent.yaml"; then
@@ -267,18 +319,52 @@ create_config() {
             fi
         done
 
-        if [ -n "$added" ]; then
-            success "Added missing collectors:${added}"
-        else
-            info "All collectors already present, no changes needed"
+        # Also add oracle_home/oracle_sid if oracle mode and missing.
+        if [ "$MODE" = "oracle" ]; then
+            if ! grep -q "oracle_home" "${CONFIG_DIR}/agent.yaml"; then
+                printf 'oracle_home: "%s"\n' "$ORACLE_HOME" >> "${CONFIG_DIR}/agent.yaml"
+                printf 'oracle_sid: "%s"\n' "$ORACLE_SID" >> "${CONFIG_DIR}/agent.yaml"
+                added="${added} oracle_home oracle_sid"
+            fi
         fi
 
-        chown nexwatch:nexwatch "${CONFIG_DIR}/agent.yaml" 2>/dev/null || true
+        if [ -n "$added" ]; then
+            success "Added missing config:${added}"
+        else
+            info "Config already up to date"
+        fi
+
+        chown "${SERVICE_USER}:${SERVICE_GROUP}" "${CONFIG_DIR}/agent.yaml" 2>/dev/null || true
         chmod 600 "${CONFIG_DIR}/agent.yaml" 2>/dev/null || true
         return
     fi
 
-    cat > "${CONFIG_DIR}/agent.yaml" <<YAML
+    # Build new config file.
+    if [ "$MODE" = "oracle" ]; then
+        cat > "${CONFIG_DIR}/agent.yaml" <<YAML
+# NexWatch Agent Configuration — Oracle Mode
+# Generated by install-agent.sh
+
+hub_url: "${HUB_URL}"
+token: "${TOKEN}"
+interval: ${INTERVAL}s
+docker_socket: /var/run/docker.sock
+oracle_home: "${ORACLE_HOME}"
+oracle_sid: "${ORACLE_SID}"
+collectors_enabled:
+  - cpu
+  - memory
+  - disk
+  - network
+  - sysinfo
+  - processes
+  - diskio
+  - connections
+  - services
+  - oracle
+YAML
+    else
+        cat > "${CONFIG_DIR}/agent.yaml" <<YAML
 # NexWatch Agent Configuration
 # Generated by install-agent.sh
 
@@ -301,21 +387,54 @@ collectors_enabled:
   - connections
   - services
 YAML
+    fi
 
     chmod 600 "${CONFIG_DIR}/agent.yaml"
-    chown nexwatch:nexwatch "${CONFIG_DIR}/agent.yaml"
+    chown "${SERVICE_USER}:${SERVICE_GROUP}" "${CONFIG_DIR}/agent.yaml"
     success "Config written to ${CONFIG_DIR}/agent.yaml"
 }
 
 # --- Create systemd service ---
 create_service() {
-    # Build optional docker supplementary group line only if docker group exists.
+    # Build optional docker supplementary group line (standard mode only).
     DOCKER_GROUP_LINE=""
-    if getent group docker > /dev/null 2>&1; then
+    if [ "$MODE" != "oracle" ] && getent group docker > /dev/null 2>&1; then
         DOCKER_GROUP_LINE="SupplementaryGroups=docker"
     fi
 
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<UNIT
+    # Oracle mode: looser security (oracle user needs full /proc and oracle dirs).
+    if [ "$MODE" = "oracle" ]; then
+        cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<UNIT
+[Unit]
+Description=NexWatch Monitoring Agent (Oracle Mode)
+Documentation=https://github.com/${REPO}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+Environment=ORACLE_HOME=${ORACLE_HOME}
+Environment=ORACLE_SID=${ORACLE_SID}
+Environment=LD_LIBRARY_PATH=${ORACLE_HOME}/lib
+Environment=PATH=${ORACLE_HOME}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=-/etc/nexwatch/agent.env
+ExecStart=${INSTALL_DIR}/${BINARY_NAME}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=${SERVICE_NAME}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    else
+        cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<UNIT
 [Unit]
 Description=NexWatch Monitoring Agent
 Documentation=https://github.com/${REPO}
@@ -324,8 +443,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=nexwatch
-Group=nexwatch
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
 EnvironmentFile=-/etc/nexwatch/agent.env
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
 Restart=on-failure
@@ -351,6 +470,7 @@ SyslogIdentifier=${SERVICE_NAME}
 [Install]
 WantedBy=multi-user.target
 UNIT
+    fi
 
     success "Systemd service created at /etc/systemd/system/${SERVICE_NAME}.service"
 }

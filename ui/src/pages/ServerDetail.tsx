@@ -34,8 +34,9 @@ import { HardeningTab } from "@/components/server/HardeningTab";
 import { VulnerabilitiesTab } from "@/components/server/VulnerabilitiesTab";
 import { SystemTab } from "@/components/server/SystemTab";
 import { ThreadDumpsTab } from "@/components/server/ThreadDumpsTab";
+import { OracleTab } from "@/components/server/OracleTab";
 
-type Tab = "metrics" | "docker" | "ports" | "system" | "services" | "hardening" | "vulnerabilities" | "threaddumps";
+type Tab = "metrics" | "docker" | "ports" | "system" | "services" | "hardening" | "vulnerabilities" | "threaddumps" | "oracle";
 
 const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "metrics", label: "Metrics", icon: Activity },
@@ -46,6 +47,7 @@ const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
   { key: "hardening", label: "Hardening", icon: Shield },
   { key: "vulnerabilities", label: "Vulns", icon: ShieldAlert },
   { key: "threaddumps", label: "Thread Dumps", icon: FileCode2 },
+  { key: "oracle", label: "Oracle DB", icon: Database },
 ];
 
 const METRICS_REFRESH_INTERVAL = 15_000;
@@ -452,6 +454,7 @@ export function ServerDetail() {
       {activeTab === "hardening" && id && <HardeningTab agentId={id} />}
       {activeTab === "vulnerabilities" && id && <VulnerabilitiesTab agentId={id} />}
       {activeTab === "threaddumps" && id && <ThreadDumpsTab agentId={id} />}
+      {activeTab === "oracle" && id && <OracleTab agentId={id} />}
     </div>
   );
 }

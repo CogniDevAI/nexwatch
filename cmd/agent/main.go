@@ -164,6 +164,9 @@ func registerCollectors(registry *collector.Registry, cfg *config.Config) {
 	if enabled["vulnerabilities"] {
 		registry.Register(collector.NewVulnerabilitiesCollector())
 	}
+	if enabled["oracle"] {
+		registry.Register(collector.NewOracleCollector(cfg.OracleHome, cfg.OracleSID))
+	}
 	if enabled["diskio"] {
 		registry.Register(collector.NewDiskIOCollector())
 	}

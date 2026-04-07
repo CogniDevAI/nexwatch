@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
+	kflag "github.com/knadh/koanf/providers/basicflag"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
-	kflag "github.com/knadh/koanf/providers/basicflag"
 	"github.com/knadh/koanf/v2"
 )
 
@@ -20,6 +20,8 @@ type Config struct {
 	Interval          time.Duration `koanf:"interval"`
 	CollectorsEnabled []string      `koanf:"collectors_enabled"`
 	DockerSocket      string        `koanf:"docker_socket"`
+	OracleHome        string        `koanf:"oracle_home"`
+	OracleSID         string        `koanf:"oracle_sid"`
 	ConfigFile        string        `koanf:"-"` // not loaded from config file itself
 }
 
