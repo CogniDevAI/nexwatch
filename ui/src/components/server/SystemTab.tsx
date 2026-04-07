@@ -139,10 +139,10 @@ function ConnectionsSection({ data }: { data: ConnectionsData }) {
     [data.by_port],
   );
 
-  const established = summary["ESTABLISHED"] ?? 0;
-  const timeWait = summary["TIME_WAIT"] ?? 0;
-  const closeWait = summary["CLOSE_WAIT"] ?? 0;
-  const listen = summary["LISTEN"] ?? 0;
+  const established = summary["established"] ?? 0;
+  const timeWait = summary["time_wait"] ?? 0;
+  const closeWait = summary["close_wait"] ?? 0;
+  const listen = summary["listen"] ?? 0;
   const total = data.total ?? 0;
 
   return (
