@@ -252,8 +252,27 @@ create_user() {
 create_config() {
     mkdir -p "$CONFIG_DIR"
 
+    # Full list of collectors shipped with this version.
+    ALL_COLLECTORS="cpu memory disk network sysinfo docker ports processes hardening vulnerabilities diskio connections services"
+
     if [ -f "${CONFIG_DIR}/agent.yaml" ]; then
-        warn "Config already exists, preserving existing configuration"
+        info "Config already exists, merging new collectors..."
+
+        # Add any collector that is missing from the existing config.
+        added=""
+        for col in $ALL_COLLECTORS; do
+            if ! grep -q "^\s*-\s*${col}\s*$" "${CONFIG_DIR}/agent.yaml"; then
+                printf '  - %s\n' "$col" >> "${CONFIG_DIR}/agent.yaml"
+                added="${added} ${col}"
+            fi
+        done
+
+        if [ -n "$added" ]; then
+            success "Added missing collectors:${added}"
+        else
+            info "All collectors already present, no changes needed"
+        fi
+
         chown nexwatch:nexwatch "${CONFIG_DIR}/agent.yaml" 2>/dev/null || true
         chmod 600 "${CONFIG_DIR}/agent.yaml" 2>/dev/null || true
         return
