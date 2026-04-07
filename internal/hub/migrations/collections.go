@@ -87,7 +87,7 @@ func init() {
 				Name:      "type",
 				Required:  true,
 				MaxSelect: 1,
-				Values:    []string{"cpu", "memory", "disk", "network", "docker", "sysinfo", "ports", "processes", "hardening", "vulnerabilities"},
+				Values:    []string{"cpu", "memory", "disk", "network", "docker", "sysinfo", "ports", "processes", "hardening", "vulnerabilities", "diskio", "connections", "services"},
 			},
 			&core.JSONField{Name: "data", MaxSize: 200000},
 			&core.DateField{Name: "timestamp", Required: true},
