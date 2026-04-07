@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { Agent } from "@/types";
 import pb from "@/lib/pocketbase";
+import { agentStatus } from "@/lib/agent";
 
 function generateToken(length = 32): string {
   const chars =
@@ -155,8 +156,8 @@ export function Agents() {
     ? `curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ws://YOUR_HUB:8090/ws/agent --token ${newAgent.token}`
     : "";
 
-  const onlineCount = agents.filter((a) => a.status === "online").length;
-  const offlineCount = agents.filter((a) => a.status === "offline").length;
+  const onlineCount = agents.filter((a) => agentStatus(a) === "online").length;
+  const offlineCount = agents.filter((a) => agentStatus(a) === "offline").length;
 
   return (
     <div>
@@ -278,19 +279,19 @@ export function Agents() {
                     <td className="px-6 py-3">
                       <span
                         className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${
-                          agent.status === "online"
+                          agentStatus(agent) === "online"
                             ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
                             : "bg-[var(--color-text-muted)]/10 text-[var(--color-text-muted)]"
                         }`}
                       >
                         <span
                           className={`w-1.5 h-1.5 rounded-full ${
-                            agent.status === "online"
+                            agentStatus(agent) === "online"
                               ? "bg-[var(--color-accent-green)]"
                               : "bg-[var(--color-text-muted)]"
                           }`}
                         />
-                        {agent.status}
+                        {agentStatus(agent)}
                       </span>
                     </td>
                     <td className="px-6 py-3 font-medium text-[var(--color-text-primary)]">

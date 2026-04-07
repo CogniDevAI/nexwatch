@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import pb from "@/lib/pocketbase";
 import type { Agent, MetricsResponse } from "@/types";
+import { agentStatus } from "@/lib/agent";
 import { MetricChart } from "@/components/charts/MetricChart";
 import { TimeRangeSelector } from "@/components/charts/TimeRangeSelector";
 import { DockerTab } from "@/components/server/DockerTab";
@@ -257,19 +258,19 @@ export function ServerDetail() {
               </h2>
               <span
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                  agent.status === "online"
+                  agentStatus(agent) === "online"
                     ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
                     : "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]"
                 }`}
               >
                 <span
                   className={`w-1.5 h-1.5 rounded-full ${
-                    agent.status === "online"
+                    agentStatus(agent) === "online"
                       ? "bg-[var(--color-accent-green)]"
                       : "bg-[var(--color-accent-red)]"
                   }`}
                 />
-                {agent.status}
+                {agentStatus(agent)}
               </span>
             </div>
             {/* Row 1: always shown — from agent record */}

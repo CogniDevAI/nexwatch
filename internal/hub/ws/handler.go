@@ -282,13 +282,14 @@ func (h *Hub) handleHeartbeat(ca *ConnectedAgent, msg *protocol.Message) {
 	h.updateLastSeen(ca.ID)
 }
 
-// updateLastSeen updates the agent's last_seen field in the database.
+// updateLastSeen updates the agent's last_seen field and ensures status is online.
 func (h *Hub) updateLastSeen(agentID string) {
 	record, err := h.app.FindRecordById("agents", agentID)
 	if err != nil {
 		return
 	}
 	record.Set("last_seen", time.Now().UTC().Format("2006-01-02 15:04:05.000Z"))
+	record.Set("status", "online")
 	_ = h.app.Save(record)
 }
 

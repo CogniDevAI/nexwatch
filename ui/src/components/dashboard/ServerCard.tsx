@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { Monitor, Apple, Terminal } from "lucide-react";
 import type { Agent } from "@/types";
+import { agentStatus } from "@/lib/agent";
 
 export interface AgentMetricsSummary {
   cpu: number;
@@ -93,7 +94,7 @@ export function ServerCard({ agent, metrics }: ServerCardProps) {
             </p>
           </div>
         </div>
-        <StatusDot status={agent.status} />
+        <StatusDot status={agentStatus(agent)} />
       </div>
 
       {metrics && (
@@ -111,12 +112,12 @@ export function ServerCard({ agent, metrics }: ServerCardProps) {
           </span>
           <span
             className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-              agent.status === "online"
+              agentStatus(agent) === "online"
                 ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
                 : "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]"
             }`}
           >
-            {agent.status}
+            {agentStatus(agent)}
           </span>
         </div>
       )}

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Server, Wifi, WifiOff, Activity } from "lucide-react";
 import { useAgentStore } from "@/stores/agentStore";
+import { agentStatus } from "@/lib/agent";
 import {
   ServerCard,
   type AgentMetricsSummary,
@@ -73,8 +74,8 @@ export function Dashboard() {
     };
   }, [fetchAgents, subscribeToAgents, fetchDashboardSummary]);
 
-  const onlineCount = agents.filter((a) => a.status === "online").length;
-  const offlineCount = agents.filter((a) => a.status === "offline").length;
+  const onlineCount = agents.filter((a) => agentStatus(a) === "online").length;
+  const offlineCount = agents.filter((a) => agentStatus(a) === "offline").length;
 
   return (
     <div>
