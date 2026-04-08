@@ -63,23 +63,17 @@ func main() {
 		if info, err := os.Stat(distPath); err == nil && info.IsDir() {
 			distFS := os.DirFS(distPath)
 			fileServer := http.FileServer(http.FS(distFS))
+			// Single catch-all route — handles both "/" and "/{path...}"
 			se.Router.GET("/{path...}", func(e *core.RequestEvent) error {
-				path := e.Request.PathValue("path")
-				// Try to serve the file directly.
-				if path != "" {
-					if _, err := fs.Stat(distFS, path); err == nil {
+				reqPath := strings.TrimPrefix(e.Request.URL.Path, "/")
+				// Serve static assets directly if they exist (js, css, images, etc.)
+				if reqPath != "" {
+					if _, err := fs.Stat(distFS, reqPath); err == nil {
 						fileServer.ServeHTTP(e.Response, e.Request)
 						return nil
 					}
 				}
-				// SPA fallback — serve index.html for all unmatched routes.
-				e.Request.URL.Path = "/"
-				fileServer.ServeHTTP(e.Response, e.Request)
-				return nil
-			})
-			// Also serve root explicitly.
-			se.Router.GET("/", func(e *core.RequestEvent) error {
-				_ = strings.TrimPrefix // keep import
+				// SPA fallback — all other routes serve index.html
 				e.Request.URL.Path = "/"
 				fileServer.ServeHTTP(e.Response, e.Request)
 				return nil
