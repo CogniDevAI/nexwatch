@@ -2,8 +2,11 @@ package main
 
 import (
 	"flag"
+	"io/fs"
 	"log"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pocketbase/pocketbase"
@@ -54,6 +57,37 @@ func main() {
 
 		// Register custom API routes.
 		api.RegisterRoutes(se, metricsSvc, wsHub)
+
+		// Serve React SPA from ./ui/dist if it exists (production builds).
+		distPath := "./ui/dist"
+		if info, err := os.Stat(distPath); err == nil && info.IsDir() {
+			distFS := os.DirFS(distPath)
+			fileServer := http.FileServer(http.FS(distFS))
+			se.Router.GET("/{path...}", func(e *core.RequestEvent) error {
+				path := e.Request.PathValue("path")
+				// Try to serve the file directly.
+				if path != "" {
+					if _, err := fs.Stat(distFS, path); err == nil {
+						fileServer.ServeHTTP(e.Response, e.Request)
+						return nil
+					}
+				}
+				// SPA fallback — serve index.html for all unmatched routes.
+				e.Request.URL.Path = "/"
+				fileServer.ServeHTTP(e.Response, e.Request)
+				return nil
+			})
+			// Also serve root explicitly.
+			se.Router.GET("/", func(e *core.RequestEvent) error {
+				_ = strings.TrimPrefix // keep import
+				e.Request.URL.Path = "/"
+				fileServer.ServeHTTP(e.Response, e.Request)
+				return nil
+			})
+			log.Printf("Serving UI from %s", distPath)
+		} else {
+			log.Printf("UI dist not found at %s — skipping static file serving", distPath)
+		}
 
 		// Initialize notification service and register channel notifiers.
 		notifySvc := notify.NewService(app)

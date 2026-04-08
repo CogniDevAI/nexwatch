@@ -27,8 +27,8 @@ FROM alpine:3.20
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 COPY --from=go-builder /nexwatch-hub .
-# PocketBase serves files from pb_public/ at the root URL automatically
-COPY --from=ui-builder /app/ui/dist ./pb_public
+# UI dist — served by the hub at root URL via Go file server
+COPY --from=ui-builder /app/ui/dist ./ui/dist
 EXPOSE 8090
 ENTRYPOINT ["./nexwatch-hub"]
 CMD ["--http=0.0.0.0:8090"]
