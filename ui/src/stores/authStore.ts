@@ -24,7 +24,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   login: async (email: string, password: string) => {
     const authData = await pb
-      .collection("users")
+      .collection("_superusers")
       .authWithPassword(email, password);
 
     const user: User = {
