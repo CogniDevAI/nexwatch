@@ -152,8 +152,16 @@ export function Agents() {
     setCopied(false);
   };
 
+  // Build hub WebSocket URL from current page location.
+  // http → ws, https → wss
+  const hubWsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/agent`;
+
   const installCommand = newAgent
-    ? `curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ws://YOUR_HUB:8090/ws/agent --token ${newAgent.token}`
+    ? `curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ${hubWsUrl} --token ${newAgent.token}`
+    : "";
+
+  const installCommandOracle = newAgent
+    ? `curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ${hubWsUrl} --token ${newAgent.token} --mode oracle --oracle-home /u01/app/oracle/product/19.3.0/dbhome1 --oracle-sid SIDNAME`
     : "";
 
   const onlineCount = agents.filter((a) => agentStatus(a) === "online").length;
@@ -408,37 +416,47 @@ export function Agents() {
               ) : (
                 /* Step 2: Show install command */
                 <div className="space-y-4">
+                  <p className="text-sm text-[var(--color-accent-green)]">
+                    Agent token generated successfully. Copy the command for your server type:
+                  </p>
+
+                  {/* Standard */}
                   <div>
-                    <p className="text-sm text-[var(--color-accent-green)] mb-3">
-                      Agent token generated successfully. Run the following
-                      command on the target server to install the agent:
-                    </p>
+                    <p className="text-xs font-semibold text-[var(--color-text-secondary)] mb-1.5">Standard (Linux)</p>
                     <div className="relative">
                       <pre className="p-4 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] text-[var(--color-text-primary)] text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
                         {installCommand}
                       </pre>
                       <button
                         onClick={() => handleCopy(installCommand)}
-                        className="absolute top-2 right-2 p-1.5 rounded-lg bg-[var(--color-bg-surface)] border border-[var(--color-border-default)] text-[var(--color-text-muted)] hover:text-[var(--color-accent-cyan)] hover:border-[var(--color-accent-cyan)] transition-colors"
-                        title="Copy to clipboard"
+                        className="absolute top-2 right-2 p-1.5 rounded-lg bg-[var(--color-bg-surface)] border border-[var(--color-border-default)] text-[var(--color-text-muted)] hover:text-[var(--color-accent-cyan)] transition-colors"
+                        title="Copy"
                       >
-                        {copied ? (
-                          <Check className="w-4 h-4 text-[var(--color-accent-green)]" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
+                        {copied ? <Check className="w-4 h-4 text-[var(--color-accent-green)]" /> : <Copy className="w-4 h-4" />}
                       </button>
                     </div>
                   </div>
 
-                  <div className="rounded-lg bg-[var(--color-accent-yellow)]/5 border border-[var(--color-accent-yellow)]/20 p-3">
-                    <p className="text-xs text-[var(--color-accent-yellow)]">
-                      <strong>Important:</strong> Replace{" "}
-                      <code className="bg-[var(--color-bg-primary)] px-1 rounded">
-                        YOUR_HUB
-                      </code>{" "}
-                      with the actual hostname or IP of your NexWatch Hub
-                      server. This token will only be shown once.
+                  {/* Oracle */}
+                  <div>
+                    <p className="text-xs font-semibold text-[var(--color-text-secondary)] mb-1.5">Oracle DB (edit <code className="text-[var(--color-accent-yellow)]">--oracle-sid</code>)</p>
+                    <div className="relative">
+                      <pre className="p-4 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] text-[var(--color-text-primary)] text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+                        {installCommandOracle}
+                      </pre>
+                      <button
+                        onClick={() => handleCopy(installCommandOracle)}
+                        className="absolute top-2 right-2 p-1.5 rounded-lg bg-[var(--color-bg-surface)] border border-[var(--color-border-default)] text-[var(--color-text-muted)] hover:text-[var(--color-accent-cyan)] transition-colors"
+                        title="Copy"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-muted)] p-3">
+                    <p className="text-xs text-[var(--color-text-muted)]">
+                      This token will only be shown once.
                     </p>
                   </div>
 
