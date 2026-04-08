@@ -1,12 +1,9 @@
 #!/bin/bash
 # NexWatch Production Deploy Script
-# Tested on Ubuntu 22.04 / Debian 12
+# Supports: Ubuntu/Debian, AlmaLinux/Rocky/RHEL/CentOS, Oracle Linux
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/deploy/deploy.sh | bash
-#
-# Or clone the repo and run:
-#   cd deploy && bash deploy.sh
+#   curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/deploy/deploy.sh | sudo bash
 
 set -euo pipefail
 
@@ -34,40 +31,40 @@ if [ "$(id -u)" -ne 0 ]; then
     error "Run as root: sudo bash deploy.sh"
 fi
 
-# ── Install dependencies ───────────────────────────────────────────────────────
-info "Installing dependencies..."
+# ── Install Docker ─────────────────────────────────────────────────────────────
+info "Checking Docker..."
 
-if command -v apt-get > /dev/null 2>&1; then
-    # Debian / Ubuntu
-    apt-get update -qq
-    apt-get install -y -qq curl git docker.io docker-compose-plugin gettext-base 2>/dev/null || \
-        apt-get install -y -qq curl git docker.io docker-compose gettext-base 2>/dev/null
+if ! command -v docker > /dev/null 2>&1; then
+    info "Installing Docker..."
 
-elif command -v dnf > /dev/null 2>&1; then
-    # AlmaLinux / Rocky / CentOS / RHEL / Oracle Linux
-    dnf install -y curl git gettext 2>/dev/null
+    if command -v apt-get > /dev/null 2>&1; then
+        apt-get update -qq
+        apt-get install -y -qq curl git
+        curl -fsSL https://get.docker.com | sh
 
-    # Docker via official repo (docker.io not in dnf by default)
-    if ! command -v docker > /dev/null 2>&1; then
-        dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo 2>/dev/null || \
-        dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-        dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    elif command -v dnf > /dev/null 2>&1; then
+        dnf install -y curl git
+        curl -fsSL https://get.docker.com | sh
+
+    elif command -v yum > /dev/null 2>&1; then
+        yum install -y curl git
+        curl -fsSL https://get.docker.com | sh
+
+    else
+        error "Unsupported OS. Install Docker manually: https://docs.docker.com/engine/install/"
     fi
 
-elif command -v yum > /dev/null 2>&1; then
-    # Older CentOS/RHEL
-    yum install -y curl git gettext
-    if ! command -v docker > /dev/null 2>&1; then
-        yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-        yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-    fi
-
+    systemctl enable docker --now
+    success "Docker installed"
 else
-    error "Unsupported package manager. Install Docker manually and re-run."
+    info "Docker already installed: $(docker --version)"
 fi
 
-systemctl enable docker --now
-success "Dependencies installed"
+# ── Install git if missing ─────────────────────────────────────────────────────
+if ! command -v git > /dev/null 2>&1; then
+    command -v dnf > /dev/null 2>&1 && dnf install -y git
+    command -v apt-get > /dev/null 2>&1 && apt-get install -y -qq git
+fi
 
 # ── Clone or update repo ───────────────────────────────────────────────────────
 if [ -d "$DEPLOY_DIR/.git" ]; then
@@ -86,101 +83,64 @@ if [ ! -f ".env" ]; then
     echo ""
     warn "No .env file found — created from template."
     echo ""
-    read -p "  Enter your domain (e.g. nexwatch.tudominio.com): " DOMAIN
-    read -p "  Enter your email for SSL certificates: " EMAIL
-    read -p "  Enter your timezone (e.g. America/Guayaquil): " TZ_INPUT
+    read -rp "  Hub port to expose (default 8090): " HUB_PORT_INPUT
+    HUB_PORT_INPUT="${HUB_PORT_INPUT:-8090}"
+    read -rp "  Timezone (e.g. America/Guayaquil): " TZ_INPUT
+    TZ_INPUT="${TZ_INPUT:-America/Guayaquil}"
 
-    sed -i "s|DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
-    sed -i "s|CERTBOT_EMAIL=.*|CERTBOT_EMAIL=${EMAIL}|" .env
+    sed -i "s|HUB_PORT=.*|HUB_PORT=${HUB_PORT_INPUT}|" .env
     sed -i "s|TZ=.*|TZ=${TZ_INPUT}|" .env
     success ".env configured"
 else
     info "Using existing .env"
 fi
 
-# Load env vars
+# Load env
 set -a; source .env; set +a
 
-# ── Render nginx config with domain ───────────────────────────────────────────
-info "Generating nginx config for domain: ${DOMAIN}..."
-mkdir -p nginx/conf.d
-envsubst '${DOMAIN}' < nginx/conf.d/nexwatch.conf > /tmp/nexwatch.conf.rendered
-mv /tmp/nexwatch.conf.rendered nginx/conf.d/nexwatch.conf
-success "Nginx config generated"
-
-# ── Initial SSL certificate (HTTP-01 challenge) ────────────────────────────────
-info "Checking SSL certificates..."
-if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
-    info "Obtaining SSL certificate for ${DOMAIN}..."
-
-    # Start nginx with HTTP only for the challenge (temp config)
-    cat > /tmp/nginx-init.conf <<NGINXEOF
-events { worker_connections 64; }
-http {
-    server {
-        listen 80;
-        location /.well-known/acme-challenge/ { root /var/www/certbot; }
-        location / { return 200 'ok'; }
-    }
-}
-NGINXEOF
-
-    # Mount certbot www and run challenge
-    docker run --rm \
-        -v certbot-www:/var/www/certbot \
-        -p 80:80 \
-        --name nginx-init \
-        nginx:alpine sh -c "mkdir -p /var/www/certbot && nginx -c /etc/nginx/nginx.conf" &
-    sleep 3
-
-    docker run --rm \
-        -v certbot-certs:/etc/letsencrypt \
-        -v certbot-www:/var/www/certbot \
-        certbot/certbot certonly \
-        --webroot -w /var/www/certbot \
-        --email "${CERTBOT_EMAIL}" \
-        --agree-tos --no-eff-email \
-        -d "${DOMAIN}" \
-        --non-interactive
-
-    docker stop nginx-init 2>/dev/null || true
-    success "SSL certificate obtained"
-else
-    info "SSL certificate already exists"
-fi
-
-# ── Pull images and start ──────────────────────────────────────────────────────
-info "Pulling latest images..."
+# ── Pull image and start ───────────────────────────────────────────────────────
+info "Pulling latest NexWatch Hub image..."
 docker compose -f docker-compose.prod.yml pull
 
-info "Starting NexWatch..."
+info "Starting NexWatch Hub..."
 docker compose -f docker-compose.prod.yml up -d
 
-# ── Wait for hub to be ready ───────────────────────────────────────────────────
+# ── Wait for hub ───────────────────────────────────────────────────────────────
 info "Waiting for hub to start..."
-for i in $(seq 1 30); do
-    if docker compose -f docker-compose.prod.yml exec -T hub wget -qO- http://localhost:8090/api/health > /dev/null 2>&1; then
+for i in $(seq 1 15); do
+    if curl -sf "http://localhost:${HUB_PORT:-8090}/api/health" > /dev/null 2>&1; then
         break
     fi
     sleep 2
 done
 
-success "NexWatch is running!"
+success "NexWatch Hub is running on port ${HUB_PORT:-8090}!"
 echo ""
-echo "  ┌─────────────────────────────────────────────────┐"
-echo "  │                                                 │"
-echo "  │   NexWatch UI:   https://${DOMAIN}              "
-echo "  │   PocketBase:    https://${DOMAIN}/_/           "
-echo "  │                                                 │"
-echo "  │   Agent install command:                        │"
-echo "  │   See: https://${DOMAIN} → Agents → New Agent  "
-echo "  │                                                 │"
-echo "  └─────────────────────────────────────────────────┘"
+echo "  ┌──────────────────────────────────────────────────────────┐"
+echo "  │                                                          │"
+echo "  │  Hub listening on:  http://localhost:${HUB_PORT:-8090}             │"
+echo "  │                                                          │"
+echo "  │  Configure your nginx to proxy this port.               │"
+echo "  │  See nginx config example below.                        │"
+echo "  │                                                          │"
+echo "  └──────────────────────────────────────────────────────────┘"
 echo ""
-warn "First time? Set up your admin account at: https://${DOMAIN}/_/"
+echo "  Nginx config snippet (add to your server block):"
 echo ""
-info "Useful commands:"
-echo "  Logs:    docker compose -f ${DEPLOY_DIR}/deploy/docker-compose.prod.yml logs -f"
-echo "  Restart: docker compose -f ${DEPLOY_DIR}/deploy/docker-compose.prod.yml restart"
-echo "  Update:  cd ${DEPLOY_DIR} && git pull && cd deploy && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d"
+echo "    location / {"
+echo "        proxy_pass         http://127.0.0.1:${HUB_PORT:-8090};"
+echo "        proxy_http_version 1.1;"
+echo "        proxy_set_header   Upgrade \$http_upgrade;"
+echo "        proxy_set_header   Connection \$connection_upgrade;"
+echo "        proxy_set_header   Host \$host;"
+echo "        proxy_set_header   X-Real-IP \$remote_addr;"
+echo "        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;"
+echo "        proxy_set_header   X-Forwarded-Proto \$scheme;"
+echo "        proxy_read_timeout 3600s;"
+echo "    }"
+echo ""
+warn "First time? Go to https://tudominio.com/_/ to set up your admin account."
+echo ""
+info "Update command:  cd ${DEPLOY_DIR}/deploy && make update"
+info "Logs:            cd ${DEPLOY_DIR}/deploy && make logs"
 echo ""

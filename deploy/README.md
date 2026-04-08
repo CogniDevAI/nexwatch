@@ -2,9 +2,10 @@
 
 ## Requisitos
 
-- VPS con Ubuntu 22.04 o Debian 12 (mínimo 1 vCPU, 1 GB RAM)
-- Dominio apuntando al VPS en Cloudflare (registro A con proxy **desactivado** ☁️→🟠 durante el primer deploy para que Let's Encrypt pueda validar)
-- Puertos 80 y 443 abiertos en el firewall del VPS
+- VPS con Linux (Ubuntu, Debian, AlmaLinux, Rocky, RHEL, Oracle Linux)
+- Nginx ya instalado y configurado con SSL en el servidor
+- Docker (el script lo instala si no está)
+- Dominio apuntando al VPS
 
 ## Deploy en un comando
 
@@ -12,45 +13,63 @@
 curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/deploy/deploy.sh | sudo bash
 ```
 
-El script instala Docker, clona el repo, configura SSL automáticamente y levanta todo.
+El script instala Docker si no está, clona el repo, crea el `.env` y levanta el hub en el puerto que elijas.
 
-## Deploy manual
+## Variables de entorno (.env)
 
-```bash
-git clone https://github.com/CogniDevAI/nexwatch.git /opt/nexwatch
-cd /opt/nexwatch/deploy
-cp .env.example .env
-# Editar .env con tu dominio, email y timezone
-nano .env
-bash deploy.sh
+| Variable | Default | Descripción |
+|---|---|---|
+| `HUB_PORT` | `8090` | Puerto del host donde escucha el hub |
+| `TZ` | `America/Guayaquil` | Timezone del contenedor |
+
+## Configurar nginx
+
+El hub expone el puerto `HUB_PORT` en localhost. Agregá esto a tu server block de nginx:
+
+```nginx
+# Necesario para WebSocket
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl;
+    server_name nexwatch.tudominio.com;
+
+    # ... tu config SSL aquí ...
+
+    location / {
+        proxy_pass         http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection $connection_upgrade;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }
+}
 ```
 
-## Cloudflare
-
-1. Durante el primer deploy, el proxy de Cloudflare debe estar **desactivado** (nube gris) para que Let's Encrypt valide el dominio
-2. Una vez que el certificado esté emitido, podés activar el proxy (nube naranja)
-3. En Cloudflare → SSL/TLS → configurar modo **Full (strict)**
-
-## Actualizar
-
-```bash
-cd /opt/nexwatch/deploy
-make update
-```
+> El `proxy_read_timeout 3600s` es **crítico** — los agentes mantienen una conexión WebSocket persistente. Sin esto nginx la corta a los 60s y los agentes aparecen offline.
 
 ## Comandos útiles
 
 ```bash
+cd /opt/nexwatch/deploy
+
 make logs      # Ver logs en tiempo real
-make status    # Estado de los contenedores
-make restart   # Reiniciar servicios
-make down      # Apagar todo
-make renew-ssl # Forzar renovación SSL
+make status    # Estado del contenedor
+make restart   # Reiniciar
+make update    # Actualizar a la última versión
+make down      # Apagar
 ```
 
 ## Agentes
 
-Una vez que el hub está corriendo, los agentes apuntan al dominio público:
+Una vez que el hub está corriendo con HTTPS:
 
 ```bash
 # Agente estándar
@@ -67,4 +86,4 @@ curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/in
   --oracle-sid fitbank
 ```
 
-> Nota: usá `wss://` (WebSocket Secure) cuando el hub está detrás de HTTPS.
+> Usá `wss://` (WebSocket Secure) cuando el hub está detrás de HTTPS.
