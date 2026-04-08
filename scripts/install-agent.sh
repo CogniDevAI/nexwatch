@@ -297,6 +297,9 @@ create_user() {
 # --- Create config ---
 create_config() {
     mkdir -p "$CONFIG_DIR"
+    # Ensure the config directory is owned and accessible by the service user.
+    chown "${SERVICE_USER}:${SERVICE_GROUP}" "$CONFIG_DIR" 2>/dev/null || true
+    chmod 750 "$CONFIG_DIR" 2>/dev/null || true
 
     # Collector lists per mode.
     STANDARD_COLLECTORS="cpu memory disk network sysinfo docker ports processes hardening vulnerabilities diskio connections services"
