@@ -36,9 +36,36 @@ fi
 
 # ── Install dependencies ───────────────────────────────────────────────────────
 info "Installing dependencies..."
-apt-get update -qq
-apt-get install -y -qq curl git docker.io docker-compose-plugin gettext-base 2>/dev/null || \
-    apt-get install -y -qq curl git docker.io docker-compose gettext-base 2>/dev/null
+
+if command -v apt-get > /dev/null 2>&1; then
+    # Debian / Ubuntu
+    apt-get update -qq
+    apt-get install -y -qq curl git docker.io docker-compose-plugin gettext-base 2>/dev/null || \
+        apt-get install -y -qq curl git docker.io docker-compose gettext-base 2>/dev/null
+
+elif command -v dnf > /dev/null 2>&1; then
+    # AlmaLinux / Rocky / CentOS / RHEL / Oracle Linux
+    dnf install -y curl git gettext 2>/dev/null
+
+    # Docker via official repo (docker.io not in dnf by default)
+    if ! command -v docker > /dev/null 2>&1; then
+        dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo 2>/dev/null || \
+        dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    fi
+
+elif command -v yum > /dev/null 2>&1; then
+    # Older CentOS/RHEL
+    yum install -y curl git gettext
+    if ! command -v docker > /dev/null 2>&1; then
+        yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    fi
+
+else
+    error "Unsupported package manager. Install Docker manually and re-run."
+fi
+
 systemctl enable docker --now
 success "Dependencies installed"
 
