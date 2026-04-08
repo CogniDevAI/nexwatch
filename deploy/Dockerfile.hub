@@ -27,6 +27,7 @@ FROM alpine:3.20
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 COPY --from=go-builder /nexwatch-hub .
+COPY --from=ui-builder /app/ui/dist ./ui/dist
 EXPOSE 8090
 ENTRYPOINT ["./nexwatch-hub"]
-CMD ["--http=0.0.0.0:8090"]
+CMD ["--http=0.0.0.0:8090", "--publicDir=./ui/dist"]
