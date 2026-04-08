@@ -10,12 +10,14 @@ RUN pnpm build
 # Stage 2: Build Go binary
 FROM golang:1.24-alpine AS go-builder
 WORKDIR /app
+# Copy dependency files first for better layer caching
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download -x 2>/dev/null || go mod download
 COPY . .
 COPY --from=ui-builder /app/ui/dist ./ui/dist
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w -X main.version=$(cat VERSION 2>/dev/null || echo dev)" \
+    -ldflags="-s -w -X main.version=${VERSION}" \
     -o /nexwatch-hub ./cmd/hub
 
 # Stage 3: Runtime
@@ -25,4 +27,4 @@ WORKDIR /app
 COPY --from=go-builder /nexwatch-hub .
 EXPOSE 8090
 ENTRYPOINT ["./nexwatch-hub"]
-CMD ["serve", "--http=0.0.0.0:8090"]
+CMD ["--http=0.0.0.0:8090"]
