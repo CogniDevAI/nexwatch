@@ -95,8 +95,12 @@ else
     info "Using existing .env"
 fi
 
-# Load env
-set -a; source .env; set +a
+# Load env — parse manually to avoid issues with comments on AlmaLinux/bash
+while IFS='=' read -r key value; do
+    # Skip empty lines and comments
+    case "$key" in ''|\#*) continue ;; esac
+    export "$key=$value"
+done < .env
 
 # ── Pull image and start ───────────────────────────────────────────────────────
 info "Pulling latest NexWatch Hub image..."
