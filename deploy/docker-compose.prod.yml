@@ -1,6 +1,9 @@
 services:
   hub:
-    image: ghcr.io/cognidevai/nexwatch-hub:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.hub
+    image: nexwatch-hub:local
     restart: unless-stopped
     environment:
       - TZ=${TZ:-America/Guayaquil}

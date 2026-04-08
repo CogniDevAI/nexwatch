@@ -19,7 +19,7 @@ status:
 
 update:
 	cd .. && git pull
-	$(COMPOSE) pull
+	$(COMPOSE) build --no-cache
 	$(COMPOSE) up -d --remove-orphans
 
 renew-ssl:

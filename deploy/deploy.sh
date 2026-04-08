@@ -102,9 +102,9 @@ while IFS='=' read -r key value; do
     export "$key=$value"
 done < .env
 
-# ── Pull image and start ───────────────────────────────────────────────────────
-info "Pulling latest NexWatch Hub image..."
-docker compose -f docker-compose.prod.yml pull
+# ── Build image and start ──────────────────────────────────────────────────────
+info "Building NexWatch Hub image (this takes ~2-3 minutes the first time)..."
+docker compose -f docker-compose.prod.yml build --no-cache
 
 info "Starting NexWatch Hub..."
 docker compose -f docker-compose.prod.yml up -d
