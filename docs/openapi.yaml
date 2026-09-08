@@ -1,0 +1,1388 @@
+openapi: 3.1.0
+info:
+  title: NexWatch Hub API
+  description: >
+    Custom API routes exposed by the NexWatch hub (a PocketBase application)
+    under /api/custom/*, plus the unauthenticated /healthz liveness probe.
+    PocketBase's own built-in routes (record CRUD under /api/collections/*,
+    auth, realtime, files, etc.) are not documented here — see the
+    PocketBase API reference for those.
+  version: "1.0.0"
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Liveness and readiness probe
+      description: >
+        Unauthenticated health check intended for load balancers, uptime
+        monitors, and container orchestrators. Performs a trivial database
+        query (counting online agents) as its DB health check.
+      security: []
+      tags: [health]
+      responses:
+        "200":
+          description: The hub and its database are healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthzResponse"
+        "503":
+          description: The database check failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthzResponse"
+
+  /api/custom/openapi.yaml:
+    get:
+      operationId: getOpenApiSpec
+      summary: Serve this OpenAPI document
+      description: Returns this OpenAPI 3.1 specification as YAML.
+      tags: [meta]
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /api/custom/dashboard:
+    get:
+      operationId: getDashboard
+      summary: Agent summaries with latest metrics
+      description: >
+        Returns every agent with its latest CPU/memory/disk percentages,
+        ready for display without further client-side aggregation.
+      tags: [dashboard]
+      responses:
+        "200":
+          description: Dashboard summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    description: Total number of agents.
+                  agents:
+                    type: object
+                    description: Map of agent id to its latest metric summary.
+                    additionalProperties:
+                      type: object
+                      properties:
+                        cpu:
+                          type: number
+                          description: Latest total CPU percent (0-100).
+                        memory:
+                          type: number
+                          description: Latest memory used percent (0-100).
+                        disk:
+                          type: number
+                          description: Latest root ("/") disk used percent (0-100).
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/custom/metrics:
+    get:
+      operationId: getMetrics
+      summary: Time-range metric queries for charting
+      description: >
+        Returns structured time series (parallel timestamp/value arrays)
+        for cpu, memory, disk, and network metrics over a time range.
+        network_rx/network_tx are cumulative byte counters since the agent
+        started, converted to MB, kept for backwards compatibility;
+        network_rx_rate/network_tx_rate are the current throughput in
+        bytes per second and should be preferred for anything labeled as
+        a rate.
+      tags: [metrics]
+      parameters:
+        - name: agent_id
+          in: query
+          schema: { type: string }
+          description: Restrict results to one agent. Omit for all agents.
+        - name: start
+          in: query
+          schema: { type: string }
+          description: Range start as a Unix timestamp (seconds) or RFC3339 string. Defaults to one hour ago.
+        - name: end
+          in: query
+          schema: { type: string }
+          description: Range end as a Unix timestamp (seconds) or RFC3339 string. Defaults to now.
+        - name: resolution
+          in: query
+          schema: { type: string, enum: [raw, 1m, 5m, 1h] }
+          description: Downsampling resolution. Auto-selected from the time range when omitted.
+      responses:
+        "200":
+          description: Structured time series.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cpu: { $ref: "#/components/schemas/TimeSeries" }
+                  memory: { $ref: "#/components/schemas/TimeSeries" }
+                  disk: { $ref: "#/components/schemas/TimeSeries" }
+                  network_rx: { $ref: "#/components/schemas/TimeSeries" }
+                  network_tx: { $ref: "#/components/schemas/TimeSeries" }
+                  network_rx_rate:
+                    allOf: [{ $ref: "#/components/schemas/TimeSeries" }]
+                    description: Current receive throughput in bytes per second.
+                  network_tx_rate:
+                    allOf: [{ $ref: "#/components/schemas/TimeSeries" }]
+                    description: Current send throughput in bytes per second.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/agents/{id}/token:
+    post:
+      operationId: generateAgentToken
+      summary: Issue or rotate an agent's authentication token
+      description: >
+        Generates a new random token for the agent, persists only its
+        SHA-256 hash, and returns the plaintext token exactly once — it
+        cannot be recovered afterwards. Calling this again rotates the
+        token, invalidating the previous one. Requires the "operator" role
+        or higher.
+      tags: [agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: The newly issued plaintext token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: The plaintext token. Shown only in this response.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/custom/agents/{id}/processes/history:
+    get:
+      operationId: getProcessHistory
+      summary: Aggregated top-process resource usage for an agent
+      tags: [agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/Range"
+      responses:
+        "200":
+          description: Top processes by average CPU over the range.
+          content:
+            application/json:
+              schema: { type: object }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/custom/agents/{id}/processes/timeline:
+    get:
+      operationId: getProcessTimeline
+      summary: Time-series CPU/memory for one process name on an agent
+      tags: [agents]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/Range"
+        - name: name
+          in: query
+          required: true
+          schema: { type: string }
+          description: Process name, or "name (cmd_fragment)" as returned by the history endpoint.
+      responses:
+        "200":
+          description: Time-series points for the requested process.
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/custom/agents/{id}/ports:
+    get:
+      operationId: getAgentPorts
+      summary: Latest open-ports snapshot for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest ports data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/processes:
+    get:
+      operationId: getAgentProcesses
+      summary: Latest process list for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest processes data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/hardening:
+    get:
+      operationId: getAgentHardening
+      summary: Latest hardening scan report for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest hardening data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/vulnerabilities:
+    get:
+      operationId: getAgentVulnerabilities
+      summary: Latest vulnerability scan report for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest vulnerability data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/diskio:
+    get:
+      operationId: getAgentDiskIO
+      summary: Latest disk I/O stats for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest disk I/O data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/connections:
+    get:
+      operationId: getAgentConnections
+      summary: Latest TCP connection summary for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest connections data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/services:
+    get:
+      operationId: getAgentServices
+      summary: Latest systemd service list for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest services data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/hardware:
+    get:
+      operationId: getAgentHardware
+      summary: Combined hardware info (sysinfo/cpu/memory) for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Hardware summary., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/oracle:
+    get:
+      operationId: getAgentOracle
+      summary: Latest Oracle database metrics for an agent
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest Oracle data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/cve:
+    get:
+      operationId: getAgentCve
+      summary: Latest CVE scan report for an agent
+      description: >
+        Returns the agent's latest cve_scan payload (scanner name/version,
+        DB build time, per-target findings for the host filesystem and any
+        scanned container images, and severity totals). available is false
+        when neither trivy nor grype is installed on the agent host.
+      tags: [agents]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200": { description: Latest CVE scan data., content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/custom/agents/{id}/update:
+    post:
+      operationId: requestAgentUpdate
+      summary: Request a self-update on one connected agent
+      description: >
+        Validates version (X.Y.Z or vX.Y.Z) and that the agent's os/arch are
+        known (reported on its own REGISTER — an agent must connect at
+        least once with a build that reports them), then dispatches an
+        "update" COMMAND over the agent's WebSocket connection and waits
+        synchronously for its immediate "started" (or "failed") ack — not
+        for the whole download/verify/install, which streams asynchronously
+        as further agent-reported progress on the agent record's
+        update_status field. Requires the "operator" role or higher. Every
+        call is recorded to the audit log (action "agent.update.request").
+      tags: [agents, updates]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: string, description: "Target version, e.g. \"0.9.1\" or \"v0.9.1\"." }
+      responses:
+        "200":
+          description: The agent acknowledged the update request.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: The agent is not currently connected, or reported it could not start the update.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [false] }
+                  error: { type: string }
+        "504":
+          description: The agent did not acknowledge the update request within the timeout.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [false] }
+                  error: { type: string }
+
+  /api/custom/agents/update-all:
+    post:
+      operationId: requestAgentUpdateAll
+      summary: Fan out a self-update request to every connected agent
+      description: >
+        Requires the "admin" role. Dispatches an "update" COMMAND to every
+        currently connected (status=online) agent, optionally skipping any
+        agent already on the target version via only_outdated, and returns
+        each agent's individual acknowledgement outcome. Every agent is
+        recorded to the audit log the same way the single-agent endpoint is.
+      tags: [agents, updates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: string, description: "Target version, e.g. \"0.9.1\" or \"v0.9.1\"." }
+                only_outdated: { type: boolean, description: "Skip agents already reporting this exact version." }
+      responses:
+        "200":
+          description: Per-agent fan-out results.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agent_id: { type: string }
+                        hostname: { type: string }
+                        ok: { type: boolean }
+                        error: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/agents/latest-version:
+    get:
+      operationId: getAgentLatestVersion
+      summary: Get the latest published agent release version
+      description: >
+        Queries the GitHub Releases API for this project's latest published
+        tag, cached for one hour. Never returns a non-2xx status on an
+        upstream failure (offline hub, GitHub rate limit) — the UI's
+        "update available" badge simply has nothing to compare against
+        until the next successful lookup.
+      tags: [agents, updates]
+      responses:
+        "200":
+          description: The latest release, or an error describing why it couldn't be fetched.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  published_at: { type: string, format: date-time }
+                  cached: { type: boolean }
+                  error: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/custom/agents/{id}/docker/{containerId}/{action}:
+    post:
+      operationId: dockerContainerAction
+      summary: Start, stop, or restart a Docker container on an agent
+      description: >
+        Validates containerId (12-64 hex characters) and action
+        (start/stop/restart) before dispatching a docker_action COMMAND to
+        the agent over its WebSocket connection, then waits synchronously
+        (up to 35s) for the agent's result. Requires the "operator" role or
+        higher. Every call — success or failure — is recorded to the audit
+        log (action "docker.<action>").
+      tags: [agents, docker]
+      parameters:
+        - { $ref: "#/components/parameters/AgentId" }
+        - name: containerId
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-fA-F]{12,64}$" }
+        - name: action
+          in: path
+          required: true
+          schema: { type: string, enum: [start, stop, restart] }
+      responses:
+        "200":
+          description: The action completed; state is the container's status afterward.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  state: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          description: The agent reported the action failed, or is not currently connected.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [false] }
+                  error: { type: string }
+                  state: { type: string }
+        "504":
+          description: The agent did not respond within the timeout.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, enum: [false] }
+                  error: { type: string }
+
+  /api/custom/agents/{id}/thread-dump:
+    post:
+      operationId: requestThreadDump
+      summary: Request a JVM thread dump for a PID on an agent
+      description: >
+        Validates that the PID is present in the agent's latest process
+        snapshot and looks like a JVM process before dispatching a
+        thread_dump command to the agent over its WebSocket connection.
+        Requires the "operator" role or higher.
+      tags: [thread-dumps]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pid]
+              properties:
+                pid:
+                  type: integer
+                  description: Process ID to dump. Must match a JVM-looking process in the agent's latest snapshot.
+                process_name:
+                  type: string
+                  description: Optional display name for the process.
+      responses:
+        "202":
+          description: Thread dump requested; poll the dump by request_id.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request_id: { type: string }
+                  status: { type: string, enum: [pending] }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          description: The target agent is not currently connected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/custom/agents/{id}/thread-dumps:
+    get:
+      operationId: listThreadDumps
+      summary: List historical thread dumps for an agent
+      tags: [thread-dumps]
+      parameters: [{ $ref: "#/components/parameters/AgentId" }]
+      responses:
+        "200":
+          description: Thread dump history (most recent first, up to 50).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  dumps:
+                    type: array
+                    items: { $ref: "#/components/schemas/ThreadDumpSummary" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/thread-dumps/{dumpId}:
+    get:
+      operationId: getThreadDump
+      summary: Get one thread dump's full output by id
+      tags: [thread-dumps]
+      parameters:
+        - name: dumpId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The full thread dump record, including output.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ThreadDumpSummary"
+                  - type: object
+                    properties:
+                      output: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/custom/notifications/{id}/test:
+    post:
+      operationId: testNotificationChannel
+      summary: Send a test notification to a channel
+      description: >
+        Dispatches a synthetic "[TEST]" alert through the given
+        notification channel to verify its configuration. Requires the
+        "operator" role or higher.
+      tags: [notifications]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: notification_channels record id.
+      responses:
+        "200":
+          description: Test notification sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  message: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/alerts/{id}/ack:
+    post:
+      operationId: ackAlert
+      summary: Acknowledge a firing alert
+      description: >
+        Records who acknowledged the alert and when
+        (alerts.acknowledged_at/acknowledged_by). An acknowledged alert is
+        never re-notified after its cooldown and is never escalated, even if
+        it keeps breaching; resolving it later keeps both fields for
+        history. Requires the "operator" role or higher.
+      tags: [alerts]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: alerts record id.
+      responses:
+        "200":
+          description: Alert acknowledged.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  acknowledged_at: { type: string, format: date-time }
+                  acknowledged_by: { type: string }
+                  acknowledged_alert: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/alerts/{id}/unack:
+    post:
+      operationId: unackAlert
+      summary: Clear a previous acknowledgement on an alert
+      description: >
+        Clears acknowledged_at/acknowledged_by, letting the alert resume
+        normal cooldown-gated re-notification and escalation. Requires the
+        "operator" role or higher.
+      tags: [alerts]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: alerts record id.
+      responses:
+        "200":
+          description: Acknowledgement cleared.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/silences/active:
+    get:
+      operationId: listActiveSilences
+      summary: List currently-active silences and the agents/checks they cover
+      description: >
+        Returns every "silences" record whose window currently covers now
+        (starts_at <= now < ends_at), each annotated with the ids of every
+        agent and check it matches. An agent is matched by agent_id, by an
+        overlapping tag, or every agent for a silence with agent_id, tags,
+        AND check_ids all empty (global). A check is matched by check_ids,
+        by an overlapping tag against the check's own tags, or every check
+        for that same global case. List/view is available to any
+        authenticated user.
+      tags: [silences]
+      responses:
+        "200":
+          description: Active silences.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  silences:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        reason: { type: string }
+                        agent_id: { type: string }
+                        tags: { type: array, items: { type: string } }
+                        check_ids: { type: array, items: { type: string } }
+                        starts_at: { type: string, format: date-time }
+                        ends_at: { type: string, format: date-time }
+                        covered_agent_ids: { type: array, items: { type: string } }
+                        covered_check_ids: { type: array, items: { type: string } }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/checks/summary:
+    get:
+      operationId: getChecksSummary
+      summary: List every black-box check with its current status
+      description: >
+        Returns every "checks" record (HTTP/TCP/ICMP black-box monitor)
+        with its current debounced status, latency, TLS certificate
+        expiry (http checks only), and 24h/7d uptime percentages
+        computed from "check_results". Current-state fields prefer the
+        checks scheduler's in-memory snapshot and fall back to the most
+        recently persisted result for a check that hasn't run since the
+        last hub restart. List/view is available to any authenticated
+        user.
+      tags: [checks]
+      responses:
+        "200":
+          description: Check summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  checks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CheckSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/checks/{id}/run:
+    post:
+      operationId: runCheckNow
+      summary: Run a check immediately
+      description: >
+        Executes one on-demand probe attempt for the check right now,
+        persists the result as a new "check_results" row (counting
+        toward the same consecutive-failure streak a scheduled run
+        would), and returns it. Requires the "operator" role or higher.
+      tags: [checks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: checks record id.
+      responses:
+        "200":
+          description: The probe result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/checks/{id}/results:
+    get:
+      operationId: getCheckResults
+      summary: Latency/status time series for one check
+      description: >
+        Returns every "check_results" row for the check within the
+        requested lookback window, ordered oldest-first and downsampled
+        to at most 500 points.
+      tags: [checks]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: checks record id.
+        - name: range
+          in: query
+          schema: { type: string, enum: ["24h", "7d"] }
+          description: Lookback window. Defaults to 24h.
+      responses:
+        "200":
+          description: A latency/status time series.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  check_id: { type: string }
+                  range: { type: string, enum: ["24h", "7d"] }
+                  points:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp: { type: number, description: Unix seconds. }
+                        latency_ms: { type: number }
+                        status: { type: string, enum: [up, down] }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/logs:
+    get:
+      operationId: getLogs
+      summary: Search shipped log entries
+      description: >
+        Returns "logs" rows (internal/agent/logs shipping journald and
+        file-tailed lines to the hub), newest first. "q" is a
+        case-insensitive substring match against the message text.
+        "before" is an opaque cursor (the previous response's
+        next_before) for "load older" pagination; live tail instead
+        subscribes to PocketBase realtime on the "logs" collection
+        directly, which is not a "/api/custom" route.
+      tags: [logs]
+      parameters:
+        - name: agent_id
+          in: query
+          schema: { type: string }
+          description: Restrict to one agent. Omit for every agent.
+        - name: level
+          in: query
+          schema: { type: string, enum: [error, warning, info, debug] }
+        - name: unit
+          in: query
+          schema: { type: string }
+          description: Exact match against the systemd unit (journald sources only).
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive substring match against the message.
+        - name: since
+          in: query
+          schema: { type: integer }
+          description: Unix milliseconds. Only entries at or after this time.
+        - name: until
+          in: query
+          schema: { type: integer }
+          description: Unix milliseconds. Only entries at or before this time.
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 500 }
+        - name: before
+          in: query
+          schema: { type: string }
+          description: Cursor from a previous response's next_before, for loading older entries.
+      responses:
+        "200":
+          description: Matching log entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LogEntry"
+                  next_before:
+                    type: string
+                    description: Cursor to pass as "before" for the next older page. Absent once there are no more results.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/logs/units:
+    get:
+      operationId: getLogUnits
+      summary: Distinct log units seen in the last 24h
+      description: >
+        Returns the distinct "unit" values across "logs" rows from the
+        last 24 hours (optionally scoped to one agent), for populating a
+        unit filter dropdown. A file-tailed source has no unit and is
+        excluded.
+      tags: [logs]
+      parameters:
+        - name: agent_id
+          in: query
+          schema: { type: string }
+          description: Restrict to one agent. Omit for every agent.
+      responses:
+        "200":
+          description: Distinct unit names, sorted alphabetically.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  units:
+                    type: array
+                    items: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/reports/preview:
+    get:
+      operationId: previewReport
+      summary: Render the weekly fleet report without sending it
+      description: >
+        Builds the report for the requested period and returns its
+        rendered subject, HTML body, and plain-text body, without
+        delivering it through any notification channel. Requires the
+        "admin" role.
+      tags: [reports]
+      parameters:
+        - name: period_days
+          in: query
+          schema: { type: integer, minimum: 1 }
+          description: Lookback window in days. Defaults to the report_period_days setting (7).
+      responses:
+        "200":
+          description: The rendered report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subject: { type: string }
+                  html: { type: string }
+                  text: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/reports/send:
+    post:
+      operationId: sendReportNow
+      summary: Build and send the weekly fleet report now
+      description: >
+        Builds the report for the configured report_period_days and
+        delivers it through every channel in report_channel_ids —
+        skipping (with a per-channel error) any channel that is missing,
+        disabled, or not of type "email". Requires the "admin" role.
+      tags: [reports]
+      responses:
+        "200":
+          description: Delivery results, one entry per configured channel.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subject: { type: string }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        channel_id: { type: string }
+                        channel_name: { type: string }
+                        success: { type: boolean }
+                        error: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/custom/prometheus/token:
+    post:
+      operationId: generatePrometheusToken
+      summary: Generate (or rotate) the /metrics bearer token
+      description: >
+        Generates a new random bearer token for GET /metrics, storing
+        only its SHA-256 hash in the prometheus_token setting. The
+        plaintext token is returned exactly once in this response and is
+        not recoverable afterward; calling this again rotates the token,
+        invalidating the previous one. Requires the "admin" role.
+      tags: [prometheus]
+      responses:
+        "200":
+          description: The new plaintext bearer token.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/public/status:
+    get:
+      operationId: getPublicStatus
+      summary: Public status page data (unauthenticated)
+      description: >
+        Returns the allowlisted status-page items (checks and/or agents,
+        each with an admin-typed label) configured via the
+        status_page_items setting, with their live status, uptime
+        percentages, and daily history. Never exposes a check's target,
+        an agent's hostname/IP, or either's raw id — only the label an
+        admin explicitly typed into status_page_items. Returns 404 when
+        status_page_enabled is false. Unauthenticated, rate-limited to 60
+        requests/minute per client IP, and cacheable for 30 seconds.
+      security: []
+      tags: [status-page]
+      responses:
+        "200":
+          description: Status page data.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title: { type: string }
+                  description: { type: string }
+                  overall: { type: string, enum: [operational, degraded, down, unknown] }
+                  updated_at: { type: string, format: date-time }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string, enum: [check, agent] }
+                        label: { type: string }
+                        status: { type: string, enum: [operational, degraded, down, unknown] }
+                        uptime_24h: { type: number }
+                        uptime_7d: { type: number }
+                        uptime_30d: { type: number }
+                        latency_ms: { type: number, description: "checks only." }
+                        daily:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              date: { type: string, format: date }
+                              uptime: { type: number }
+                              incidents: { type: integer }
+                        last_incident_at: { type: string, format: date-time }
+        "404":
+          description: The status page is not enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "429":
+          description: Rate limit exceeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /metrics:
+    get:
+      operationId: getPrometheusMetrics
+      summary: Prometheus text-exposition metrics (bearer-token gated)
+      description: >
+        Returns fleet, agent, container, check, and alert metrics in
+        Prometheus text exposition format (see docs/openapi.yaml — full
+        metric catalogue in the README's "Prometheus" section). Requires
+        an "Authorization: Bearer <token>" header matching the token
+        generated via POST /api/custom/prometheus/token. Returns 404 when
+        no token has been generated (prometheus_token unset) and 401 for
+        a missing or incorrect token.
+      security: []
+      tags: [prometheus]
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema: { type: string }
+        "401":
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Prometheus exposition is not enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/custom/push/vapid-public-key:
+    get:
+      operationId: getPushVAPIDPublicKey
+      summary: Get the hub's VAPID public key for Web Push subscriptions
+      description: >
+        Returns the hub's VAPID public key, used by the browser's
+        PushManager.subscribe() call. The key pair is generated lazily on
+        the first request (and persisted — the private key in the
+        superuser-only "hub_secrets" collection, the public key in the
+        "vapid_public_key" setting), so every subsequent call returns the
+        same key. Available to any authenticated user.
+      tags: [push]
+      responses:
+        "200":
+          description: The hub's VAPID public key.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  public_key: { type: string }
+        "500":
+          description: Failed to generate or persist a VAPID key pair.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/custom/push/test:
+    post:
+      operationId: sendTestPush
+      summary: Send a test Web Push notification to the caller's own devices
+      description: >
+        Sends a test notification to every "push_subscriptions" row owned
+        by the authenticated caller (never another user's), returning a
+        per-endpoint success/failure result so the UI can show exactly
+        which of the caller's devices received it. A subscription that the
+        push service reports as gone (HTTP 404/410) is deleted as a side
+        effect of this call. Recorded in the audit log as "push.test".
+      tags: [push]
+      responses:
+        "200":
+          description: Per-endpoint delivery results (possibly an empty list).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        endpoint: { type: string }
+                        success: { type: boolean }
+                        error: { type: string }
+        "500":
+          description: Failed to load the caller's push subscriptions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        A PocketBase auth token (superuser or "users" record) passed in the
+        Authorization header. PocketBase accepts it either as a bare token
+        or with a "Bearer " prefix.
+
+  parameters:
+    AgentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: agents record id.
+    Range:
+      name: range
+      in: query
+      schema: { type: string, enum: ["1h", "6h", "24h"] }
+      description: Lookback window. Defaults to 1h.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid authentication.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: Authenticated, but the account's role is too low.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    BadRequest:
+      description: The request was malformed or failed validation.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    ServerError:
+      description: An unexpected server-side error occurred.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+    HealthzResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        version:
+          type: string
+          description: Hub build version.
+        uptime_seconds:
+          type: integer
+          description: Seconds since the hub process started.
+        db:
+          type: string
+          enum: [ok, error]
+          description: Result of a trivial database query.
+        agents_online:
+          type: integer
+          description: Number of agents currently marked online.
+
+    TimeSeries:
+      type: object
+      properties:
+        timestamps:
+          type: array
+          items: { type: number }
+          description: Unix timestamps (seconds), ascending.
+        values:
+          type: array
+          items: { type: number }
+
+    ThreadDumpSummary:
+      type: object
+      properties:
+        id: { type: string }
+        pid: { type: integer }
+        process_name: { type: string }
+        request_id: { type: string }
+        status: { type: string, enum: [pending, success, error] }
+        error: { type: string }
+        taken_at: { type: string }
+
+    CheckSummary:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [http, tcp, icmp] }
+        target: { type: string }
+        status:
+          type: string
+          enum: [up, down]
+          description: Debounced status — see failures_before_down. Absent if the check has never run.
+        latency_ms: { type: number }
+        last_checked_at: { type: string, format: date-time }
+        tls_expires_at:
+          type: string
+          format: date-time
+          description: Only present for http checks that recorded a TLS certificate.
+        cert_expiring_soon:
+          type: boolean
+          description: True when tls_expires_at is within the check's own tls_expiry_warn_days.
+        uptime_24h: { type: number, description: "Percentage of check_results in the last 24h with status=up." }
+        uptime_7d: { type: number, description: "Percentage of check_results in the last 7d with status=up." }
+        enabled: { type: boolean }
+
+    CheckResult:
+      type: object
+      properties:
+        id: { type: string }
+        check_id: { type: string }
+        status: { type: string, enum: [up, down] }
+        latency_ms: { type: number }
+        status_code: { type: integer, description: "http checks only." }
+        error: { type: string }
+        tls_expires_at: { type: string, format: date-time }
+        checked_at: { type: string, format: date-time }
+
+    LogEntry:
+      type: object
+      properties:
+        id: { type: string }
+        agent_id: { type: string }
+        ts: { type: integer, description: Unix milliseconds. }
+        source:
+          type: string
+          description: "\"journald\", or \"file:<path>\" for a tailed file."
+        unit: { type: string, description: systemd unit name (journald sources only). }
+        level: { type: string, enum: [error, warning, info, debug] }
+        message: { type: string }
+        fields:
+          type: object
+          additionalProperties: { type: string }
+          description: Small set of extra structured attributes (e.g. journald's SYSLOG_IDENTIFIER).

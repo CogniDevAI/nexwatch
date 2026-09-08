@@ -1,8 +1,6 @@
 package api
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -14,7 +12,11 @@ import (
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/router"
 
+	"github.com/CogniDevAI/nexwatch/docs"
+	"github.com/CogniDevAI/nexwatch/internal/hub/agenttoken"
+	"github.com/CogniDevAI/nexwatch/internal/hub/audit"
 	"github.com/CogniDevAI/nexwatch/internal/hub/metrics"
 	"github.com/CogniDevAI/nexwatch/internal/hub/threaddump"
 	"github.com/CogniDevAI/nexwatch/internal/shared/protocol"
@@ -25,95 +27,138 @@ type CommandSender interface {
 	SendCommand(agentID string, payload *protocol.CommandPayload) error
 }
 
-// RegisterRoutes registers all custom API routes on the PocketBase router.
-func RegisterRoutes(se *core.ServeEvent, metricsSvc *metrics.Service, cmdSender CommandSender) {
+// RegisteredRoute describes one HTTP route registered under "/api/custom".
+// openapi_test.go derives the expected route list from these (rather than
+// a hand-maintained slice) so it fails when a new route is added to
+// RegisterRoutes/RegisterAlertRoutes without a matching entry in
+// docs/openapi.yaml.
+type RegisteredRoute struct {
+	Method string
+	Path   string // full path including the "/api/custom" prefix
+}
+
+// routeRecorder wraps a router.RouterGroup, recording every route
+// registered through it (with its full prefixed path) alongside actually
+// registering it.
+type routeRecorder struct {
+	group      *router.RouterGroup[*core.RequestEvent]
+	prefix     string
+	Registered []RegisteredRoute
+}
+
+func newRouteRecorder(group *router.RouterGroup[*core.RequestEvent], prefix string) *routeRecorder {
+	return &routeRecorder{group: group, prefix: prefix}
+}
+
+func (r *routeRecorder) GET(path string, action func(e *core.RequestEvent) error) *router.Route[*core.RequestEvent] {
+	r.Registered = append(r.Registered, RegisteredRoute{Method: http.MethodGet, Path: r.prefix + path})
+	return r.group.GET(path, action)
+}
+
+func (r *routeRecorder) POST(path string, action func(e *core.RequestEvent) error) *router.Route[*core.RequestEvent] {
+	r.Registered = append(r.Registered, RegisteredRoute{Method: http.MethodPost, Path: r.prefix + path})
+	return r.group.POST(path, action)
+}
+
+// RegisterRoutes registers all custom API routes on apiGroup, which the
+// caller must already have bound with the desired auth middleware (e.g.
+// apis.RequireAuth()) and mounted at the "/api/custom" prefix. It returns
+// every route it registered, for openapi_test.go to cross-check against
+// docs/openapi.yaml.
+func RegisterRoutes(se *core.ServeEvent, apiGroup *router.RouterGroup[*core.RequestEvent], metricsSvc *metrics.Service, cmdSender CommandSender) []RegisteredRoute {
 	tdSvc := threaddump.NewService(se.App)
-	router := se.Router
+	rec := newRouteRecorder(apiGroup, "/api/custom")
 
 	// GET /api/custom/dashboard — agent summaries with latest metrics
-	router.GET("/api/custom/dashboard", func(e *core.RequestEvent) error {
+	rec.GET("/dashboard", func(e *core.RequestEvent) error {
 		return handleDashboard(e, metricsSvc)
 	})
 
 	// GET /api/custom/metrics — time-range metric queries
-	router.GET("/api/custom/metrics", func(e *core.RequestEvent) error {
+	rec.GET("/metrics", func(e *core.RequestEvent) error {
 		return handleMetricsQuery(e, metricsSvc)
 	})
 
-	// GET /api/custom/agents/{id}/install-command — generate agent install command
-	router.GET("/api/custom/agents/{id}/install-command", func(e *core.RequestEvent) error {
-		return handleInstallCommand(e)
-	})
+	// GET /api/custom/openapi.yaml — this hub's OpenAPI specification
+	rec.GET("/openapi.yaml", handleOpenAPISpec)
+
+	// POST /api/custom/agents/{id}/token — generate/rotate a hashed agent token
+	rec.POST("/agents/{id}/token", handleGenerateAgentToken).Bind(RequireRole(RoleOperator))
 
 	// GET /api/custom/agents/{id}/processes/history — aggregate process stats over a time range
-	router.GET("/api/custom/agents/{id}/processes/history", func(e *core.RequestEvent) error {
-		return handleProcessHistory(e)
-	})
+	rec.GET("/agents/{id}/processes/history", handleProcessHistory)
 
 	// GET /api/custom/agents/{id}/processes/timeline — time-series data for a specific process name
-	router.GET("/api/custom/agents/{id}/processes/timeline", func(e *core.RequestEvent) error {
-		return handleProcessTimeline(e)
-	})
+	rec.GET("/agents/{id}/processes/timeline", handleProcessTimeline)
 
 	// GET /api/custom/agents/{id}/ports — latest open ports for an agent
-	router.GET("/api/custom/agents/{id}/ports", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/ports", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "ports")
 	})
 
 	// GET /api/custom/agents/{id}/processes — latest process list for an agent
-	router.GET("/api/custom/agents/{id}/processes", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/processes", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "processes")
 	})
 
 	// GET /api/custom/agents/{id}/hardening — latest hardening report for an agent
-	router.GET("/api/custom/agents/{id}/hardening", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/hardening", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "hardening")
 	})
 
 	// GET /api/custom/agents/{id}/vulnerabilities — latest vulnerability scan for an agent
-	router.GET("/api/custom/agents/{id}/vulnerabilities", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/vulnerabilities", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "vulnerabilities")
 	})
 
 	// GET /api/custom/agents/{id}/diskio — latest disk I/O stats for an agent
-	router.GET("/api/custom/agents/{id}/diskio", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/diskio", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "diskio")
 	})
 
 	// GET /api/custom/agents/{id}/connections — latest TCP connection summary for an agent
-	router.GET("/api/custom/agents/{id}/connections", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/connections", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "connections")
 	})
 
 	// GET /api/custom/agents/{id}/services — latest systemd service list for an agent
-	router.GET("/api/custom/agents/{id}/services", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/services", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "services")
 	})
 
 	// GET /api/custom/agents/{id}/hardware — system hardware info from sysinfo, cpu, memory metrics
-	router.GET("/api/custom/agents/{id}/hardware", func(e *core.RequestEvent) error {
-		return handleHardware(e)
-	})
+	rec.GET("/agents/{id}/hardware", handleHardware)
 
 	// GET /api/custom/agents/{id}/oracle — latest Oracle metrics for an agent
-	router.GET("/api/custom/agents/{id}/oracle", func(e *core.RequestEvent) error {
+	rec.GET("/agents/{id}/oracle", func(e *core.RequestEvent) error {
 		return handleLatestMetricByType(e, "oracle")
 	})
 
-	// POST /api/custom/agents/{id}/thread-dump — request a thread dump for a PID
-	router.POST("/api/custom/agents/{id}/thread-dump", func(e *core.RequestEvent) error {
-		return handleRequestThreadDump(e, tdSvc, cmdSender)
+	// GET /api/custom/agents/{id}/cve — latest CVE scan report for an agent
+	rec.GET("/agents/{id}/cve", func(e *core.RequestEvent) error {
+		return handleLatestMetricByType(e, "cve_scan")
 	})
+
+	// POST /api/custom/agents/{id}/thread-dump — request a thread dump for a PID
+	rec.POST("/agents/{id}/thread-dump", func(e *core.RequestEvent) error {
+		return handleRequestThreadDump(e, tdSvc, cmdSender)
+	}).Bind(RequireRole(RoleOperator))
 
 	// GET /api/custom/agents/{id}/thread-dumps — list historical thread dumps
-	router.GET("/api/custom/agents/{id}/thread-dumps", func(e *core.RequestEvent) error {
-		return handleListThreadDumps(e)
-	})
+	rec.GET("/agents/{id}/thread-dumps", handleListThreadDumps)
 
 	// GET /api/custom/thread-dumps/{dumpId} — get a single thread dump by ID
-	router.GET("/api/custom/thread-dumps/{dumpId}", func(e *core.RequestEvent) error {
-		return handleGetThreadDump(e)
-	})
+	rec.GET("/thread-dumps/{dumpId}", handleGetThreadDump)
+
+	return rec.Registered
+}
+
+// handleOpenAPISpec serves the embedded OpenAPI 3.1 document describing
+// every /api/custom/* route (see docs/openapi.yaml).
+func handleOpenAPISpec(e *core.RequestEvent) error {
+	e.Response.Header().Set("Content-Type", "application/yaml")
+	_, err := e.Response.Write(docs.OpenAPISpec)
+	return err
 }
 
 // handleDashboard returns a summary of all agents with their latest metrics.
@@ -138,6 +183,11 @@ func handleDashboard(e *core.RequestEvent, metricsSvc *metrics.Service) error {
 		CPU    float64 `json:"cpu"`
 		Memory float64 `json:"memory"`
 		Disk   float64 `json:"disk"`
+		// CveTotals is the agent's latest cve_scan severity totals
+		// (critical/high/medium/low/unknown/fixable), omitted when no scan
+		// has been reported yet — cheap to include since GetLatestMetricsByAgent
+		// already fetched every metric type for this agent.
+		CveTotals map[string]int `json:"cve_totals,omitempty"`
 	}
 
 	// Build a map keyed by agent ID with extracted percentage values.
@@ -166,6 +216,20 @@ func handleDashboard(e *core.RequestEvent, metricsSvc *metrics.Service) error {
 				case "disk":
 					// Use the root mount ("/") or the first mount with the highest usage.
 					summary.Disk = extractDiskPercent(data)
+				case "cve_scan":
+					if available, _ := data["available"].(bool); available {
+						if totals, ok := data["totals"].(map[string]any); ok {
+							ct := make(map[string]int, len(totals))
+							for k, v := range totals {
+								if f, ok := toFloat(v); ok {
+									ct[k] = int(f)
+								}
+							}
+							if len(ct) > 0 {
+								summary.CveTotals = ct
+							}
+						}
+					}
 				}
 			}
 		}
@@ -276,7 +340,16 @@ type timeSeries struct {
 
 // handleMetricsQuery returns metrics as structured time series for chart rendering.
 // Query params: agent_id, start (unix seconds or RFC3339), end (unix seconds or RFC3339), resolution
-// Response format: { cpu: {timestamps, values}, memory: {timestamps, values}, disk: {timestamps, values}, network_rx: {timestamps, values}, network_tx: {timestamps, values} }
+// Response format: { cpu: {timestamps, values}, memory: {timestamps, values}, disk: {timestamps, values},
+// network_rx: {timestamps, values}, network_tx: {timestamps, values},
+// network_rx_rate: {timestamps, values}, network_tx_rate: {timestamps, values} }
+//
+// network_rx/network_tx are the agent's cumulative byte counters since it
+// started (in MB, for backwards compatibility with existing UI callers);
+// network_rx_rate/network_tx_rate are the current throughput in bytes per
+// second, sourced from the agent's bytes_recv_per_sec/bytes_sent_per_sec
+// fields (see internal/agent/collector/network.go). Prefer the *_rate
+// series for anything labeled as a rate — the cumulative fields are not one.
 func handleMetricsQuery(e *core.RequestEvent, metricsSvc *metrics.Service) error {
 	agentID := e.Request.URL.Query().Get("agent_id")
 	resolution := e.Request.URL.Query().Get("resolution")
@@ -314,6 +387,8 @@ func handleMetricsQuery(e *core.RequestEvent, metricsSvc *metrics.Service) error
 	disk := timeSeries{Timestamps: []float64{}, Values: []float64{}}
 	networkRx := timeSeries{Timestamps: []float64{}, Values: []float64{}}
 	networkTx := timeSeries{Timestamps: []float64{}, Values: []float64{}}
+	networkRxRate := timeSeries{Timestamps: []float64{}, Values: []float64{}}
+	networkTxRate := timeSeries{Timestamps: []float64{}, Values: []float64{}}
 
 	for _, r := range records {
 		mtype := r.GetString("type")
@@ -351,6 +426,12 @@ func handleMetricsQuery(e *core.RequestEvent, metricsSvc *metrics.Service) error
 			networkRx.Values = append(networkRx.Values, rx)
 			networkTx.Timestamps = append(networkTx.Timestamps, ts)
 			networkTx.Values = append(networkTx.Values, tx)
+
+			rxRate, txRate := extractNetworkRates(data)
+			networkRxRate.Timestamps = append(networkRxRate.Timestamps, ts)
+			networkRxRate.Values = append(networkRxRate.Values, rxRate)
+			networkTxRate.Timestamps = append(networkTxRate.Timestamps, ts)
+			networkTxRate.Values = append(networkTxRate.Values, txRate)
 		}
 	}
 
@@ -360,13 +441,17 @@ func handleMetricsQuery(e *core.RequestEvent, metricsSvc *metrics.Service) error
 	sortTimeSeries(&disk)
 	sortTimeSeries(&networkRx)
 	sortTimeSeries(&networkTx)
+	sortTimeSeries(&networkRxRate)
+	sortTimeSeries(&networkTxRate)
 
 	return e.JSON(http.StatusOK, map[string]any{
-		"cpu":        cpu,
-		"memory":     memory,
-		"disk":       disk,
-		"network_rx": networkRx,
-		"network_tx": networkTx,
+		"cpu":             cpu,
+		"memory":          memory,
+		"disk":            disk,
+		"network_rx":      networkRx,
+		"network_tx":      networkTx,
+		"network_rx_rate": networkRxRate,
+		"network_tx_rate": networkTxRate,
 	})
 }
 
@@ -391,19 +476,22 @@ func sortTimeSeries(ts *timeSeries) {
 	}
 }
 
-// extractNetworkBytes returns total bytes_recv and bytes_sent from the primary interface.
-func extractNetworkBytes(data map[string]any) (float64, float64) {
+// bestNetworkInterface returns the data map of the interface with the most
+// cumulative traffic (skipping loopback), or nil if none is found. Both
+// extractNetworkBytes and extractNetworkRates key off the same interface so
+// the cumulative totals and the current rate always describe the same NIC.
+func bestNetworkInterface(data map[string]any) map[string]any {
 	interfacesRaw, ok := data["interfaces"]
 	if !ok {
-		return 0, 0
+		return nil
 	}
 	interfaces, ok := interfacesRaw.([]any)
 	if !ok || len(interfaces) == 0 {
-		return 0, 0
+		return nil
 	}
 
-	// Find the interface with the most traffic (skip loopback).
-	var bestRx, bestTx float64
+	var best map[string]any
+	var bestTotal float64
 	for _, iface := range interfaces {
 		ifMap, ok := iface.(map[string]any)
 		if !ok {
@@ -415,17 +503,50 @@ func extractNetworkBytes(data map[string]any) (float64, float64) {
 		}
 		rx, _ := toFloat(ifMap["bytes_recv"])
 		tx, _ := toFloat(ifMap["bytes_sent"])
-		if rx+tx > bestRx+bestTx {
-			bestRx = rx
-			bestTx = tx
+		if best == nil || rx+tx > bestTotal {
+			best = ifMap
+			bestTotal = rx + tx
 		}
 	}
-	// Convert to MB for display.
-	return math.Round(bestRx/1024/1024*100) / 100, math.Round(bestTx/1024/1024*100) / 100
+	return best
 }
 
-// handleInstallCommand generates a curl install command for an agent.
-func handleInstallCommand(e *core.RequestEvent) error {
+// extractNetworkBytes returns total bytes_recv and bytes_sent from the
+// primary interface, converted to MB. This is a cumulative counter since
+// the agent started — not a rate — kept only for backwards compatibility;
+// see extractNetworkRates for current throughput.
+func extractNetworkBytes(data map[string]any) (float64, float64) {
+	best := bestNetworkInterface(data)
+	if best == nil {
+		return 0, 0
+	}
+	rx, _ := toFloat(best["bytes_recv"])
+	tx, _ := toFloat(best["bytes_sent"])
+	// Convert to MB for display.
+	return math.Round(rx/1024/1024*100) / 100, math.Round(tx/1024/1024*100) / 100
+}
+
+// extractNetworkRates returns the current bytes-per-second receive/send
+// rate from the primary interface's bytes_recv_per_sec/bytes_sent_per_sec
+// fields (see internal/agent/collector/network.go). Older agent versions
+// that have not yet reported these fields fall back to 0 rather than
+// misrepresenting the cumulative counters as a rate.
+func extractNetworkRates(data map[string]any) (float64, float64) {
+	best := bestNetworkInterface(data)
+	if best == nil {
+		return 0, 0
+	}
+	rxRate, _ := toFloat(best["bytes_recv_per_sec"])
+	txRate, _ := toFloat(best["bytes_sent_per_sec"])
+	return math.Round(rxRate*100) / 100, math.Round(txRate*100) / 100
+}
+
+// handleGenerateAgentToken issues a new random authentication token for an
+// agent. Only the SHA-256 hash of the token is persisted (agents.token_hash);
+// the plaintext value is returned in the response exactly once and is not
+// recoverable afterwards. Calling this again for the same agent rotates the
+// token, invalidating the previous one.
+func handleGenerateAgentToken(e *core.RequestEvent) error {
 	agentID := e.Request.PathValue("id")
 	if agentID == "" {
 		return e.JSON(http.StatusBadRequest, map[string]string{
@@ -433,7 +554,6 @@ func handleInstallCommand(e *core.RequestEvent) error {
 		})
 	}
 
-	// Lookup the agent record.
 	agent, err := e.App.FindRecordById("agents", agentID)
 	if err != nil {
 		return e.JSON(http.StatusNotFound, map[string]string{
@@ -441,51 +561,35 @@ func handleInstallCommand(e *core.RequestEvent) error {
 		})
 	}
 
-	token := agent.GetString("token")
-	if token == "" {
-		// Generate a token if not present.
-		token, err = generateToken()
-		if err != nil {
-			return e.JSON(http.StatusInternalServerError, map[string]string{
-				"error": "failed to generate token",
-			})
-		}
-		agent.Set("token", token)
-		if err := e.App.Save(agent); err != nil {
-			return e.JSON(http.StatusInternalServerError, map[string]string{
-				"error": "failed to save token",
-			})
-		}
+	plaintext, hash, err := agenttoken.Generate()
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to generate token",
+		})
 	}
 
-	// Determine the hub URL from the request.
-	scheme := "https"
-	if e.Request.TLS == nil {
-		scheme = "http"
+	agent.Set("token_hash", hash)
+	if agent.GetString("status") == "" {
+		agent.Set("status", "pending")
 	}
-	hubURL := fmt.Sprintf("%s://%s", scheme, e.Request.Host)
+	if err := e.App.Save(agent); err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "failed to save token",
+		})
+	}
 
-	// Generate the install command.
-	installCmd := fmt.Sprintf(
-		`curl -sSL %s/install.sh | sudo bash -s -- --hub="%s" --token="%s"`,
-		hubURL, hubURL, token,
-	)
-
-	return e.JSON(http.StatusOK, map[string]any{
-		"agentId":        agentID,
-		"token":          token,
-		"installCommand": installCmd,
-		"hubUrl":         hubURL,
+	audit.Record(e.App, e, audit.Entry{
+		Action:     "agent.token.regenerate",
+		TargetType: "agents",
+		TargetID:   agent.Id,
+		AgentID:    agent.Id,
+		Details:    map[string]any{"hostname": agent.GetString("hostname")},
+		Result:     "success",
 	})
-}
 
-// generateToken creates a cryptographically secure random token.
-func generateToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes), nil
+	return e.JSON(http.StatusOK, map[string]string{
+		"token": plaintext,
+	})
 }
 
 // parseRangeParam converts a range string ("1h", "6h", "24h") to milliseconds.
@@ -950,6 +1054,7 @@ func handleLatestMetricByType(e *core.RequestEvent, metricType string) error {
 			"diskio":          `{"devices":[]}`,
 			"connections":     `{"summary":{},"total":0,"by_port":[]}`,
 			"services":        `{"services":[],"total":0,"running":0,"failed":0,"other":0}`,
+			"cve_scan":        `{"scanner":"","scanner_version":"","db_updated_at":"","scanned_at":"","duration_ms":0,"stale":false,"available":false,"error":"no scan has been reported yet","targets":[],"totals":{"critical":0,"high":0,"medium":0,"low":0,"unknown":0,"fixable":0}}`,
 			"oracle":          `{"instance":{},"sessions":{},"blocked_sessions":[],"top_sql":[],"tablespaces":[],"sga":{},"pga":{},"waits":[],"locks":[]}`,
 		}
 		empty, ok := emptyResponses[metricType]
@@ -983,6 +1088,9 @@ func handleLatestMetricByType(e *core.RequestEvent, metricType string) error {
 // ─── Thread Dump handlers ──────────────────────────────────────────────────────
 
 // handleRequestThreadDump triggers a thread dump for a given PID on an agent.
+// Before dispatching the command it verifies the PID is present in the
+// agent's latest process snapshot and looks like a JVM process, to prevent
+// requesting a jstack dump against an arbitrary/unrelated PID.
 func handleRequestThreadDump(e *core.RequestEvent, tdSvc *threaddump.Service, sender CommandSender) error {
 	agentID := e.Request.PathValue("id")
 
@@ -997,15 +1105,73 @@ func handleRequestThreadDump(e *core.RequestEvent, tdSvc *threaddump.Service, se
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "pid is required"})
 	}
 
-	requestID, err := tdSvc.RequestDump(agentID, body.PID, body.ProcessName, sender.SendCommand)
+	procs, err := latestProcessSnapshot(e.App, agentID)
 	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to load process snapshot"})
+	}
+	if ok, reason := isDumpablePID(procs, body.PID); !ok {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": reason})
+	}
+
+	requestedBy := ""
+	if e.Auth != nil {
+		requestedBy = e.Auth.Id
+		if email := e.Auth.GetString("email"); email != "" {
+			requestedBy = fmt.Sprintf("%s (%s)", e.Auth.Id, email)
+		}
+	}
+
+	requestID, err := tdSvc.RequestDump(agentID, body.PID, body.ProcessName, requestedBy, sender.SendCommand)
+	if err != nil {
+		audit.Record(e.App, e, audit.Entry{
+			Action:     "threaddump.request",
+			TargetType: "agents",
+			TargetID:   agentID,
+			AgentID:    agentID,
+			Details:    map[string]any{"pid": body.PID, "process_name": body.ProcessName},
+			Result:     "failure",
+		})
 		return e.JSON(http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 	}
+
+	audit.Record(e.App, e, audit.Entry{
+		Action:     "threaddump.request",
+		TargetType: "agents",
+		TargetID:   agentID,
+		AgentID:    agentID,
+		Details:    map[string]any{"pid": body.PID, "process_name": body.ProcessName, "request_id": requestID},
+		Result:     "success",
+	})
 
 	return e.JSON(http.StatusAccepted, map[string]string{
 		"request_id": requestID,
 		"status":     "pending",
 	})
+}
+
+// latestProcessSnapshot loads and decodes the most recently recorded
+// "processes" metric snapshot for an agent. It returns a nil slice (not an
+// error) when no snapshot has been recorded yet.
+func latestProcessSnapshot(app core.App, agentID string) ([]processEntry, error) {
+	records, err := app.FindRecordsByFilter(
+		"metrics",
+		"agent_id = {:agentId} && type = 'processes'",
+		"-timestamp",
+		1, 0,
+		map[string]any{"agentId": agentID},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	var snap processSnapshot
+	if err := json.Unmarshal([]byte(records[0].GetString("data")), &snap); err != nil {
+		return nil, err
+	}
+	return snap.Processes, nil
 }
 
 // handleListThreadDumps returns the dump history for an agent.
