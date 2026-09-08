@@ -1,9 +1,26 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { Activity, Search, ArrowUpDown, X } from "lucide-react";
+import { Activity, Search, X } from "lucide-react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import pb from "@/lib/pocketbase";
+import { apiFetch } from "@/lib/api";
 import type { ProcessEntry } from "@/types";
+import { Table, Th, Td } from "@/components/ui/Table";
+import { rowClass } from "@/components/ui/rowClass";
+import { StatusIndicator, type Status } from "@/components/ui/StatusIndicator";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { Input } from "@/components/ui/Field";
+import { IconButton } from "@/components/ui/Button";
+import { Panel } from "@/components/ui/Panel";
+import {
+  CHART_AXIS_FONT,
+  CHART_AXIS_STROKE,
+  CHART_GRID_STROKE,
+  formatChartValue,
+  makeYAxisFormatter,
+  makeYRange,
+} from "@/lib/uplotHelpers";
 
 // ─── New interfaces for History/Audit API ───────────────────────────────────
 
@@ -67,25 +84,24 @@ function formatMB(bytes: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: string }) {
+function processStatus(status: string): Status {
   const normalized = status.toLowerCase();
-  let classes: string;
-
-  if (normalized === "running" || normalized === "R") {
-    classes = "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]";
-  } else if (normalized === "stopped" || normalized === "T" || normalized === "zombie" || normalized === "Z") {
-    classes = "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]";
-  } else {
-    classes = "bg-[var(--color-text-muted)]/10 text-[var(--color-text-muted)]";
+  if (normalized === "running" || normalized === "r") return "ok";
+  if (
+    normalized === "stopped" ||
+    normalized === "t" ||
+    normalized === "zombie" ||
+    normalized === "z"
+  ) {
+    return "critical";
   }
+  return "offline";
+}
 
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${classes}`}>
-      {status}
-    </span>
-  );
+function loadColor(value: number): string {
+  if (value > 80) return "text-[var(--color-critical)]";
+  if (value > 50) return "text-[var(--color-warn)]";
+  return "text-[var(--color-ink)]";
 }
 
 // ─── Timeline chart (uPlot) ──────────────────────────────────────────────────
@@ -93,13 +109,11 @@ function StatusBadge({ status }: { status: string }) {
 function ProcessTimelineChart({ data, name }: { data: ProcessTimelineResponse; name: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
+  const [legendValue, setLegendValue] = useState<number | null>(null);
 
   const uplotData: uPlot.AlignedData = useMemo(() => {
     if (!data.points.length) return [[], []];
-    return [
-      data.points.map((p) => p.timestamp),
-      data.points.map((p) => p.cpu_percent),
-    ];
+    return [data.points.map((p) => p.timestamp), data.points.map((p) => p.cpu_percent)];
   }, [data.points]);
 
   const buildOptions = useCallback(
@@ -107,38 +121,46 @@ function ProcessTimelineChart({ data, name }: { data: ProcessTimelineResponse; n
       width,
       height: 200,
       cursor: { drag: { x: false, y: false } },
+      legend: { show: false }, // replaced by the custom legend in the panel header
       scales: {
         x: { time: true },
-        y: { auto: true },
+        y: { auto: true, range: makeYRange("%") },
       },
       axes: [
         {
-          stroke: "#484f58",
-          grid: { stroke: "#1e1e2e", width: 1 },
-          ticks: { stroke: "#1e1e2e", width: 1 },
-          font: "11px Inter, sans-serif",
+          stroke: CHART_AXIS_STROKE,
+          grid: { stroke: CHART_GRID_STROKE, width: 1 },
+          ticks: { stroke: CHART_GRID_STROKE, width: 1 },
+          font: CHART_AXIS_FONT,
         },
         {
-          stroke: "#484f58",
-          grid: { stroke: "#1e1e2e", width: 1 },
-          ticks: { stroke: "#1e1e2e", width: 1 },
-          font: "11px Inter, sans-serif",
-          values: (_self: uPlot, ticks: number[]) =>
-            ticks.map((v) => `${v.toFixed(0)}`),
-          label: "%",
-          labelFont: "11px Inter, sans-serif",
-          labelSize: 20,
+          stroke: CHART_AXIS_STROKE,
+          grid: { stroke: CHART_GRID_STROKE, width: 1 },
+          ticks: { stroke: CHART_GRID_STROKE, width: 1 },
+          font: CHART_AXIS_FONT,
+          values: makeYAxisFormatter("%"),
+          // No axis title: the unit is already in the panel header.
         },
       ],
       series: [
         {},
         {
-          label: "CPU %",
-          stroke: "#06b6d4",
+          label: "CPU",
+          stroke: "#5b9dff",
           width: 2,
-          fill: "#06b6d410",
+          fill: "#5b9dff10",
         },
       ],
+      hooks: {
+        setCursor: [
+          (u: uPlot) => {
+            const lastIdx = u.data[0].length - 1;
+            const idx = u.cursor.idx ?? (lastIdx >= 0 ? lastIdx : null);
+            const v = idx === null ? null : u.data[1]?.[idx];
+            setLegendValue(typeof v === "number" ? v : null);
+          },
+        ],
+      },
     }),
     [],
   );
@@ -163,6 +185,13 @@ function ProcessTimelineChart({ data, name }: { data: ProcessTimelineResponse; n
     };
   }, [uplotData, buildOptions]);
 
+  // Show the latest value by default, before any hover.
+  useEffect(() => {
+    const lastIdx = uplotData[0]?.length - 1;
+    const v = lastIdx !== undefined && lastIdx >= 0 ? uplotData[1]?.[lastIdx] : null;
+    setLegendValue(typeof v === "number" ? v : null);
+  }, [uplotData]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -181,13 +210,20 @@ function ProcessTimelineChart({ data, name }: { data: ProcessTimelineResponse; n
   }, []);
 
   return (
-    <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-5">
-      <h3 className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">
-        {name} — CPU over time
-        <span className="ml-2 text-xs font-normal text-[var(--color-text-muted)]">(%)</span>
-      </h3>
+    <Panel className="p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <h3 className="text-sm font-semibold text-[var(--color-ink)]">
+          {name} — CPU over time
+          <span className="ml-2 text-xs font-normal text-[var(--color-ink-faint)]">(%)</span>
+        </h3>
+        <span className="flex items-center gap-1.5 font-mono text-xs text-[var(--color-ink-muted)] tabular-nums">
+          <span className="h-2 w-2 flex-shrink-0 rounded-full bg-[#5b9dff]" aria-hidden="true" />
+          CPU
+          <span className="text-[var(--color-ink)]">{formatChartValue(legendValue, "%")}</span>
+        </span>
+      </div>
       <div ref={containerRef} className="w-full" />
-    </div>
+    </Panel>
   );
 }
 
@@ -207,10 +243,7 @@ function AuditView({ agentId }: { agentId: string }) {
       setHistoryLoading(true);
       setHistoryError(false);
       try {
-        const res = await fetch(
-          `/api/custom/agents/${agentId}/processes/history?range=${r}`,
-          { headers: { Authorization: pb.authStore.token } },
-        );
+        const res = await apiFetch(`/api/custom/agents/${agentId}/processes/history?range=${r}`);
         if (!res.ok) {
           setHistoryError(true);
           setHistory(null);
@@ -232,9 +265,8 @@ function AuditView({ agentId }: { agentId: string }) {
     async (name: string, r: AuditRange) => {
       setTimelineLoading(true);
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `/api/custom/agents/${agentId}/processes/timeline?name=${encodeURIComponent(name)}&range=${r}`,
-          { headers: { Authorization: pb.authStore.token } },
         );
         if (!res.ok) {
           setTimeline(null);
@@ -253,12 +285,12 @@ function AuditView({ agentId }: { agentId: string }) {
 
   // Fetch when range changes
   useEffect(() => {
-    fetchHistory(range);
+    void fetchHistory(range);
     // Clear timeline when range changes so it refetches for current selection
     if (selectedProcess) {
-      fetchTimeline(selectedProcess, range);
+      void fetchTimeline(selectedProcess, range);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range, fetchHistory]);
 
   function handleRowClick(name: string) {
@@ -268,7 +300,7 @@ function AuditView({ agentId }: { agentId: string }) {
       return;
     }
     setSelectedProcess(name);
-    fetchTimeline(name, range);
+    void fetchTimeline(name, range);
   }
 
   function handleDeselect() {
@@ -283,25 +315,26 @@ function AuditView({ agentId }: { agentId: string }) {
       {/* Section 1: Top Consumers */}
       <div>
         {/* Range selector */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider mr-1">
-            Range
-          </span>
+        <div className="mb-4 flex items-center gap-2" role="radiogroup" aria-label="Audit range">
+          <span className="mr-1 text-sm text-[var(--color-ink-muted)]">Range</span>
           {AUDIT_RANGES.map((r) => (
             <button
               key={r}
+              type="button"
+              role="radio"
+              aria-checked={range === r}
               onClick={() => setRange(r)}
-              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                 range === r
-                  ? "bg-[var(--color-accent-cyan)]/15 text-[var(--color-accent-cyan)]"
-                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] border border-[var(--color-border-default)]"
+                  ? "bg-[var(--color-signal)]/15 text-[var(--color-signal)]"
+                  : "border border-[var(--color-line)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
               }`}
             >
               {r}
             </button>
           ))}
           {history && (
-            <span className="ml-auto text-xs text-[var(--color-text-muted)]">
+            <span className="ml-auto text-xs text-[var(--color-ink-faint)]">
               {history.snapshot_count} snapshots
             </span>
           )}
@@ -309,149 +342,96 @@ function AuditView({ agentId }: { agentId: string }) {
 
         {/* Table */}
         {historyLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Activity className="w-5 h-5 text-[var(--color-accent-cyan)] animate-pulse" />
-            <span className="ml-3 text-sm text-[var(--color-text-secondary)]">
-              Loading history...
-            </span>
-          </div>
+          <Skeleton className="h-48 w-full" />
         ) : historyError ? (
-          <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-10 text-center">
-            <Activity className="w-12 h-12 text-[var(--color-text-muted)] mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-[var(--color-text-primary)] mb-2">
-              No history data
-            </h3>
-            <p className="text-sm text-[var(--color-text-secondary)] max-w-md mx-auto">
-              No process history has been recorded for this agent yet.
-            </p>
+          <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]">
+            <ErrorState
+              title="No history data"
+              description="No process history has been recorded for this agent yet."
+            />
           </div>
         ) : top.length === 0 ? (
-          <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-10 text-center">
-            <Activity className="w-12 h-12 text-[var(--color-text-muted)] mx-auto mb-4" />
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              No top consumers found for the selected range.
-            </p>
+          <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]">
+            <EmptyState icon={Activity} title="No top consumers for this range" />
           </div>
         ) : (
-          <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--color-border-default)]">
-                    {(["NAME", "USER", "SAMPLES", "AVG CPU", "MAX CPU", "AVG MEM", "MAX RSS"] as const).map(
-                      (col) => (
-                        <th
-                          key={col}
-                          className={`px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider sticky top-0 bg-[var(--color-bg-surface)] ${
-                            col === "NAME" || col === "USER" ? "text-left" : "text-right"
-                          }`}
-                        >
-                          {col}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-border-muted)]">
-                  {top.map((p, idx) => (
-                    <tr
-                      key={p.name}
-                      onClick={() => handleRowClick(p.name)}
-                      className={`cursor-pointer transition-colors ${
-                        selectedProcess === p.name
-                          ? "bg-[var(--color-accent-cyan)]/5"
-                          : idx % 2 === 0
-                            ? "bg-transparent"
-                            : "bg-[var(--color-bg-elevated)]/30"
-                      } hover:bg-[var(--color-bg-elevated)]`}
-                    >
-                      <td className="px-5 py-3 font-medium text-[var(--color-text-primary)]">
-                        <div className="flex flex-col gap-0.5">
-                          <span className="truncate max-w-[200px]">
-                            {p.cmd_fragment ? p.name.split(" (")[0] : p.name}
-                          </span>
-                          {p.cmd_fragment && (
-                            <span className="text-xs text-[var(--color-accent-cyan)] font-mono truncate max-w-[200px]">
-                              {p.cmd_fragment}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3 text-[var(--color-text-secondary)]">{p.user}</td>
-                      <td className="px-5 py-3 text-right">
-                        <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] tabular-nums">
-                          {p.sample_count}
+          <Table>
+            <thead>
+              <tr className="border-b border-[var(--color-line)]">
+                <Th>Name</Th>
+                <Th>User</Th>
+                <Th align="right">Samples</Th>
+                <Th align="right">Avg CPU</Th>
+                <Th align="right">Max CPU</Th>
+                <Th align="right">Avg mem</Th>
+                <Th align="right">Max RSS</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--color-line-soft)]">
+              {top.map((p, idx) => (
+                <tr
+                  key={p.name}
+                  onClick={() => handleRowClick(p.name)}
+                  className={`cursor-pointer ${
+                    selectedProcess === p.name ? "bg-[var(--color-signal)]/5" : rowClass(idx)
+                  }`}
+                >
+                  <Td className="font-medium">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="max-w-[200px] truncate">
+                        {p.cmd_fragment ? p.name.split(" (")[0] : p.name}
+                      </span>
+                      {p.cmd_fragment && (
+                        <span className="max-w-[200px] truncate font-mono text-xs text-[var(--color-signal)]">
+                          {p.cmd_fragment}
                         </span>
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums">
-                        <span
-                          className={
-                            p.avg_cpu > 80
-                              ? "text-[var(--color-accent-red)]"
-                              : p.avg_cpu > 50
-                                ? "text-[var(--color-accent-yellow)]"
-                                : "text-[var(--color-text-primary)]"
-                          }
-                        >
-                          {p.avg_cpu.toFixed(1)}%
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums">
-                        <span
-                          className={
-                            p.max_cpu > 80
-                              ? "text-[var(--color-accent-red)]"
-                              : p.max_cpu > 50
-                                ? "text-[var(--color-accent-yellow)]"
-                                : "text-[var(--color-text-primary)]"
-                          }
-                        >
-                          {p.max_cpu.toFixed(1)}%
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums text-[var(--color-text-primary)]">
-                        {p.avg_mem.toFixed(1)}%
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums text-[var(--color-text-primary)]">
-                        {formatMB(p.max_rss)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                      )}
+                    </div>
+                  </Td>
+                  <Td className="text-[var(--color-ink-muted)]">{p.user}</Td>
+                  <Td align="right">
+                    <span className="inline-flex items-center justify-center rounded-full bg-[var(--color-panel-raised)] px-2 py-0.5 font-mono text-xs font-medium text-[var(--color-ink-muted)] tabular-nums">
+                      {p.sample_count}
+                    </span>
+                  </Td>
+                  <Td align="right" className={`font-mono tabular-nums ${loadColor(p.avg_cpu)}`}>
+                    {p.avg_cpu.toFixed(1)}%
+                  </Td>
+                  <Td align="right" className={`font-mono tabular-nums ${loadColor(p.max_cpu)}`}>
+                    {p.max_cpu.toFixed(1)}%
+                  </Td>
+                  <Td align="right" className="font-mono tabular-nums">
+                    {p.avg_mem.toFixed(1)}%
+                  </Td>
+                  <Td align="right" className="font-mono tabular-nums">
+                    {formatMB(p.max_rss)}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
         )}
       </div>
 
       {/* Section 2: Timeline */}
       {selectedProcess && (
         <div>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-[var(--color-ink)]">
               {selectedProcess} — CPU over time
             </h3>
-            <button
-              onClick={handleDeselect}
-              className="flex items-center justify-center w-6 h-6 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors"
-              title="Deselect process"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <IconButton aria-label="Deselect process" onClick={handleDeselect}>
+              <X className="h-4 w-4" />
+            </IconButton>
           </div>
 
           {timelineLoading ? (
-            <div className="flex items-center justify-center py-12 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)]">
-              <Activity className="w-5 h-5 text-[var(--color-accent-cyan)] animate-pulse" />
-              <span className="ml-3 text-sm text-[var(--color-text-secondary)]">
-                Loading timeline...
-              </span>
-            </div>
+            <Skeleton className="h-48 w-full" />
           ) : timeline && timeline.points.length > 0 ? (
             <ProcessTimelineChart data={timeline} name={selectedProcess} />
           ) : (
-            <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-8 text-center">
-              <p className="text-sm text-[var(--color-text-secondary)]">
+            <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)] p-8 text-center">
+              <p className="text-sm text-[var(--color-ink-muted)]">
                 No timeline data available for this process in the selected range.
               </p>
             </div>
@@ -473,50 +453,51 @@ function LiveView({ agentId }: { agentId: string }) {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchProcesses = useCallback(async (showLoading = false) => {
-    if (showLoading) setLoading(true);
-    try {
-      const res = await fetch(`/api/custom/agents/${agentId}/processes`, {
-        headers: { Authorization: pb.authStore.token },
-      });
-      if (!res.ok) {
+  const fetchProcesses = useCallback(
+    async (showLoading = false) => {
+      if (showLoading) setLoading(true);
+      try {
+        const res = await apiFetch(`/api/custom/agents/${agentId}/processes`);
+        if (!res.ok) {
+          setProcesses([]);
+          setError(true);
+          return;
+        }
+        type RawProcess = {
+          pid: number;
+          name: string;
+          cpu_percent: number;
+          mem_percent: number;
+          rss: number;
+          status: string;
+          user: string;
+          cmdline: string;
+        };
+        const json = (await res.json()) as { processes: RawProcess[]; total_count: number };
+        const items: ProcessEntry[] = (json.processes ?? []).map((p) => ({
+          pid: p.pid,
+          name: p.name,
+          cpu_percent: p.cpu_percent,
+          memory_percent: p.mem_percent,
+          memory_rss: p.rss,
+          status: p.status,
+          user: p.user,
+          command: p.cmdline,
+        }));
+        setProcesses(items);
+        setError(false);
+      } catch {
         setProcesses([]);
         setError(true);
-        return;
+      } finally {
+        setLoading(false);
       }
-      type RawProcess = {
-        pid: number;
-        name: string;
-        cpu_percent: number;
-        mem_percent: number;
-        rss: number;
-        status: string;
-        user: string;
-        cmdline: string;
-      };
-      const json = (await res.json()) as { processes: RawProcess[]; total_count: number };
-      const items: ProcessEntry[] = (json.processes ?? []).map((p) => ({
-        pid: p.pid,
-        name: p.name,
-        cpu_percent: p.cpu_percent,
-        memory_percent: p.mem_percent,
-        memory_rss: p.rss,
-        status: p.status,
-        user: p.user,
-        command: p.cmdline,
-      }));
-      setProcesses(items);
-      setError(false);
-    } catch {
-      setProcesses([]);
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [agentId]);
+    },
+    [agentId],
+  );
 
   useEffect(() => {
-    fetchProcesses(true);
+    void fetchProcesses(true);
     intervalRef.current = setInterval(() => fetchProcesses(false), REFRESH_INTERVAL);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -548,9 +529,7 @@ function LiveView({ agentId }: { agentId: string }) {
       const valA = a[sortKey];
       const valB = b[sortKey];
       const cmp =
-        typeof valA === "string"
-          ? (valA as string).localeCompare(valB as string)
-          : (valA as number) - (valB as number);
+        typeof valA === "string" ? valA.localeCompare(valB as string) : valA - (valB as number);
       return sortDir === "asc" ? cmp : -cmp;
     });
   }, [processes, filter, sortKey, sortDir]);
@@ -564,146 +543,95 @@ function LiveView({ agentId }: { agentId: string }) {
     field: SortKey;
     align?: "left" | "right";
   }) => (
-    <th
-      className={`text-${align} px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider sticky top-0 bg-[var(--color-bg-surface)] cursor-pointer select-none hover:text-[var(--color-accent-cyan)] transition-colors`}
-      onClick={() => handleSort(field)}
-    >
-      <span className={`inline-flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}>
-        {label}
-        {sortKey === field && (
-          <ArrowUpDown className="w-3 h-3 text-[var(--color-accent-cyan)]" />
-        )}
-      </span>
-    </th>
+    <Th align={align} sortable sortActive={sortKey === field} onClick={() => handleSort(field)}>
+      {label}
+    </Th>
   );
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <Activity className="w-5 h-5 text-[var(--color-accent-cyan)] animate-pulse" />
-        <span className="ml-3 text-sm text-[var(--color-text-secondary)]">
-          Loading processes...
-        </span>
-      </div>
-    );
+    return <Skeleton className="h-72 w-full" />;
   }
 
   if (error || processes.length === 0) {
     return (
-      <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-10 text-center">
-        <Activity className="w-12 h-12 text-[var(--color-text-muted)] mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-[var(--color-text-primary)] mb-2">
-          No data yet
-        </h3>
-        <p className="text-sm text-[var(--color-text-secondary)] max-w-md mx-auto">
-          No process data has been reported by this agent. Make sure the process
-          collector is enabled.
-        </p>
+      <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]">
+        <EmptyState
+          icon={Activity}
+          title="No data yet"
+          description="No process data has been reported by this agent. Make sure the process collector is enabled."
+        />
       </div>
     );
   }
 
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-text-muted)]" />
-          <input
-            type="text"
-            placeholder="Filter processes..."
+          <Search
+            className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--color-ink-faint)]"
+            aria-hidden="true"
+          />
+          <Input
+            type="search"
+            placeholder="Filter processes…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="pl-9 pr-4 py-2 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent-cyan)] transition-colors w-full sm:w-72"
+            aria-label="Filter processes"
+            className="w-full py-2 pl-9 sm:w-72"
           />
         </div>
-        <span className="text-sm text-[var(--color-text-secondary)]">
-          <span className="font-medium text-[var(--color-text-primary)]">{filtered.length}</span>
-          {filter ? ` of ${processes.length}` : ""} {processes.length === 1 ? "process" : "processes"}
+        <span className="text-sm text-[var(--color-ink-muted)]">
+          <span className="font-mono font-medium text-[var(--color-ink)]">{filtered.length}</span>
+          {filter ? ` of ${processes.length}` : ""}{" "}
+          {processes.length === 1 ? "process" : "processes"}
         </span>
       </div>
 
-      <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border-default)]">
-                <SortableHeader label="Name" field="name" />
-                <SortableHeader label="PID" field="pid" align="right" />
-                <SortableHeader label="CPU %" field="cpu_percent" align="right" />
-                <SortableHeader label="Mem %" field="memory_percent" align="right" />
-                <SortableHeader label="RSS" field="memory_rss" align="right" />
-                <SortableHeader label="Status" field="status" />
-                <SortableHeader label="User" field="user" />
-                <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider sticky top-0 bg-[var(--color-bg-surface)]">
-                  Command
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--color-border-muted)]">
-              {filtered.map((p, idx) => (
-                <tr
-                  key={p.pid}
-                  className={`transition-colors ${
-                    idx % 2 === 0
-                      ? "bg-transparent"
-                      : "bg-[var(--color-bg-elevated)]/30"
-                  } hover:bg-[var(--color-bg-elevated)]`}
-                >
-                  <td className="px-5 py-3 font-medium text-[var(--color-text-primary)]">
-                    <span className="truncate max-w-[180px] block">{p.name}</span>
-                  </td>
-                  <td className="px-5 py-3 text-right text-[var(--color-text-secondary)] tabular-nums">
-                    {p.pid}
-                  </td>
-                  <td className="px-5 py-3 text-right tabular-nums">
-                    <span
-                      className={
-                        p.cpu_percent > 80
-                          ? "text-[var(--color-accent-red)]"
-                          : p.cpu_percent > 50
-                            ? "text-[var(--color-accent-yellow)]"
-                            : "text-[var(--color-text-primary)]"
-                      }
-                    >
-                      {p.cpu_percent.toFixed(1)}%
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-right tabular-nums">
-                    <span
-                      className={
-                        p.memory_percent > 80
-                          ? "text-[var(--color-accent-red)]"
-                          : p.memory_percent > 50
-                            ? "text-[var(--color-accent-yellow)]"
-                            : "text-[var(--color-text-primary)]"
-                      }
-                    >
-                      {p.memory_percent.toFixed(1)}%
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-right text-[var(--color-text-primary)] tabular-nums">
-                    {formatMB(p.memory_rss)}
-                  </td>
-                  <td className="px-5 py-3">
-                    <StatusBadge status={p.status} />
-                  </td>
-                  <td className="px-5 py-3 text-[var(--color-text-secondary)]">
-                    {p.user}
-                  </td>
-                  <td className="px-5 py-3 text-[var(--color-text-muted)] font-mono text-xs max-w-[300px]">
-                    <span
-                      className="truncate block cursor-help"
-                      title={p.command}
-                    >
-                      {p.command}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <Table>
+        <thead>
+          <tr className="border-b border-[var(--color-line)]">
+            <SortableHeader label="Name" field="name" />
+            <SortableHeader label="PID" field="pid" align="right" />
+            <SortableHeader label="CPU" field="cpu_percent" align="right" />
+            <SortableHeader label="Mem" field="memory_percent" align="right" />
+            <SortableHeader label="RSS" field="memory_rss" align="right" />
+            <SortableHeader label="Status" field="status" />
+            <SortableHeader label="User" field="user" />
+            <Th>Command</Th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[var(--color-line-soft)]">
+          {filtered.map((p, idx) => (
+            <tr key={p.pid} className={rowClass(idx)}>
+              <Td className="font-medium">
+                <span className="block max-w-[180px] truncate">{p.name}</span>
+              </Td>
+              <Td align="right" className="font-mono text-[var(--color-ink-muted)] tabular-nums">
+                {p.pid}
+              </Td>
+              <Td align="right" className={`font-mono tabular-nums ${loadColor(p.cpu_percent)}`}>
+                {p.cpu_percent.toFixed(1)}%
+              </Td>
+              <Td align="right" className={`font-mono tabular-nums ${loadColor(p.memory_percent)}`}>
+                {p.memory_percent.toFixed(1)}%
+              </Td>
+              <Td align="right" className="font-mono tabular-nums">
+                {formatMB(p.memory_rss)}
+              </Td>
+              <Td>
+                <StatusIndicator status={processStatus(p.status)} label={p.status} />
+              </Td>
+              <Td className="text-[var(--color-ink-muted)]">{p.user}</Td>
+              <Td className="max-w-[300px] font-mono text-xs text-[var(--color-ink-faint)]">
+                <span className="block cursor-help truncate" title={p.command}>
+                  {p.command}
+                </span>
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
     </div>
   );
 }
@@ -716,15 +644,22 @@ export function ServicesTab({ agentId }: ServicesTabProps) {
   return (
     <div>
       {/* Live / Audit toggle */}
-      <div className="inline-flex gap-1 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-1 mb-5">
+      <div
+        className="mb-5 inline-flex gap-1 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-panel)] p-1"
+        role="radiogroup"
+        aria-label="View"
+      >
         {(["live", "audit"] as ViewMode[]).map((v) => (
           <button
             key={v}
+            type="button"
+            role="radio"
+            aria-checked={view === v}
             onClick={() => setView(v)}
-            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-150 capitalize ${
+            className={`rounded-[var(--radius-chip)] px-4 py-1.5 text-sm font-medium capitalize transition-colors ${
               view === v
-                ? "bg-[var(--color-accent-cyan)]/15 text-[var(--color-accent-cyan)]"
-                : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                ? "bg-[var(--color-signal)]/15 text-[var(--color-signal)]"
+                : "text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
             }`}
           >
             {v}
@@ -732,11 +667,7 @@ export function ServicesTab({ agentId }: ServicesTabProps) {
         ))}
       </div>
 
-      {view === "live" ? (
-        <LiveView agentId={agentId} />
-      ) : (
-        <AuditView agentId={agentId} />
-      )}
+      {view === "live" ? <LiveView agentId={agentId} /> : <AuditView agentId={agentId} />}
     </div>
   );
 }

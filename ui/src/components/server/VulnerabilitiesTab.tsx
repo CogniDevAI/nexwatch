@@ -1,7 +1,11 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { ShieldAlert } from "lucide-react";
-import pb from "@/lib/pocketbase";
+import { ShieldAlert, ShieldCheck } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 import type { VulnerabilityData, VulnerabilityItem } from "@/types";
+import { MetricTile } from "@/components/ui/MetricTile";
+import { SeverityBadge } from "@/components/ui/SeverityBadge";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 interface VulnerabilitiesTabProps {
   agentId: string;
@@ -17,59 +21,24 @@ const SEVERITY_ORDER: Record<VulnerabilityItem["severity"], number> = {
   info: 4,
 };
 
-const SEVERITY_STYLES: Record<
-  VulnerabilityItem["severity"],
-  { badge: string; card: string; bg: string }
-> = {
-  critical: {
-    badge: "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]",
-    card: "border-l-[var(--color-accent-red)]",
-    bg: "bg-[var(--color-accent-red)]",
-  },
-  high: {
-    badge: "bg-[#f97316]/10 text-[#f97316]",
-    card: "border-l-[#f97316]",
-    bg: "bg-[#f97316]",
-  },
-  medium: {
-    badge: "bg-[var(--color-accent-yellow)]/10 text-[var(--color-accent-yellow)]",
-    card: "border-l-[var(--color-accent-yellow)]",
-    bg: "bg-[var(--color-accent-yellow)]",
-  },
-  low: {
-    badge: "bg-[var(--color-accent-cyan)]/10 text-[var(--color-accent-cyan)]",
-    card: "border-l-[var(--color-accent-cyan)]",
-    bg: "bg-[var(--color-accent-cyan)]",
-  },
-  info: {
-    badge: "bg-[var(--color-text-muted)]/10 text-[var(--color-text-muted)]",
-    card: "border-l-[var(--color-text-muted)]",
-    bg: "bg-[var(--color-text-muted)]",
-  },
+const SEVERITY_BORDER: Record<VulnerabilityItem["severity"], string> = {
+  critical: "border-l-[var(--color-critical)]",
+  high: "border-l-[var(--color-severity-high)]",
+  medium: "border-l-[var(--color-warn)]",
+  low: "border-l-[var(--color-signal)]",
+  info: "border-l-[var(--color-ink-faint)]",
 };
 
-function SummaryCard({
-  label,
-  count,
-  severity,
-}: {
-  label: string;
-  count: number;
-  severity: VulnerabilityItem["severity"];
-}) {
-  const style = SEVERITY_STYLES[severity];
-  return (
-    <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4 text-center">
-      <div className={`w-2 h-2 rounded-full ${style.bg} mx-auto mb-2`} />
-      <div className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">
-        {count}
-      </div>
-      <div className="text-xs text-[var(--color-text-muted)] mt-1 capitalize">
-        {label}
-      </div>
-    </div>
-  );
-}
+const SEVERITY_TONE: Record<
+  VulnerabilityItem["severity"],
+  "default" | "ok" | "warning" | "critical"
+> = {
+  critical: "critical",
+  high: "critical",
+  medium: "warning",
+  low: "default",
+  info: "default",
+};
 
 export function VulnerabilitiesTab({ agentId }: VulnerabilitiesTabProps) {
   const [data, setData] = useState<VulnerabilityData | null>(null);
@@ -77,44 +46,45 @@ export function VulnerabilitiesTab({ agentId }: VulnerabilitiesTabProps) {
   const [error, setError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchData = useCallback(async (showLoading = false) => {
-    if (showLoading) setLoading(true);
-    try {
-      const res = await fetch(`/api/custom/agents/${agentId}/vulnerabilities`, {
-        headers: { Authorization: pb.authStore.token },
-      });
-      if (!res.ok) {
+  const fetchData = useCallback(
+    async (showLoading = false) => {
+      if (showLoading) setLoading(true);
+      try {
+        const res = await apiFetch(`/api/custom/agents/${agentId}/vulnerabilities`);
+        if (!res.ok) {
+          setData(null);
+          setError(true);
+          return;
+        }
+        // API returns { items, summary: {critical,high,medium,low}, total }.
+        // Frontend VulnerabilityData expects summary to also include 'info' and 'total'.
+        const json = await res.json();
+        const rawSummary = json.summary ?? {};
+        const mapped: VulnerabilityData = {
+          items: json.items ?? [],
+          summary: {
+            critical: rawSummary.critical ?? 0,
+            high: rawSummary.high ?? 0,
+            medium: rawSummary.medium ?? 0,
+            low: rawSummary.low ?? 0,
+            info: rawSummary.info ?? 0,
+            total: json.total ?? json.items?.length ?? 0,
+          },
+        };
+        setData(mapped);
+        setError(false);
+      } catch {
         setData(null);
         setError(true);
-        return;
+      } finally {
+        setLoading(false);
       }
-      // API returns { items, summary: {critical,high,medium,low}, total }.
-      // Frontend VulnerabilityData expects summary to also include 'info' and 'total'.
-      const json = await res.json();
-      const rawSummary = json.summary ?? {};
-      const mapped: VulnerabilityData = {
-        items: json.items ?? [],
-        summary: {
-          critical: rawSummary.critical ?? 0,
-          high: rawSummary.high ?? 0,
-          medium: rawSummary.medium ?? 0,
-          low: rawSummary.low ?? 0,
-          info: rawSummary.info ?? 0,
-          total: json.total ?? (json.items?.length ?? 0),
-        },
-      };
-      setData(mapped);
-      setError(false);
-    } catch {
-      setData(null);
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [agentId]);
+    },
+    [agentId],
+  );
 
   useEffect(() => {
-    fetchData(true);
+    void fetchData(true);
 
     intervalRef.current = setInterval(() => fetchData(false), REFRESH_INTERVAL);
     return () => {
@@ -124,97 +94,66 @@ export function VulnerabilitiesTab({ agentId }: VulnerabilitiesTabProps) {
 
   const sortedItems = useMemo(() => {
     if (!data) return [];
-    return [...data.items].sort(
-      (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
-    );
+    return [...data.items].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
   }, [data]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <ShieldAlert className="w-5 h-5 text-[var(--color-accent-cyan)] animate-pulse" />
-        <span className="ml-3 text-sm text-[var(--color-text-secondary)]">
-          Loading vulnerabilities...
-        </span>
+      <div className="space-y-4">
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-10 text-center">
-        <ShieldAlert className="w-12 h-12 text-[var(--color-text-muted)] mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-[var(--color-text-primary)] mb-2">
-          No data yet
-        </h3>
-        <p className="text-sm text-[var(--color-text-secondary)] max-w-md mx-auto">
-          No vulnerability data has been reported by this agent. Make sure the
-          vulnerability scanner is enabled.
-        </p>
+      <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]">
+        <EmptyState
+          icon={ShieldAlert}
+          title="No data yet"
+          description="No vulnerability data has been reported by this agent. Make sure the vulnerability scanner is enabled."
+        />
       </div>
     );
   }
 
   return (
     <div>
-      {/* Summary cards */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
-        <SummaryCard label="Critical" count={data.summary.critical} severity="critical" />
-        <SummaryCard label="High" count={data.summary.high} severity="high" />
-        <SummaryCard label="Medium" count={data.summary.medium} severity="medium" />
-        <SummaryCard label="Low" count={data.summary.low} severity="low" />
-        <SummaryCard label="Info" count={data.summary.info} severity="info" />
-        <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4 text-center">
-          <div className="w-2 h-2 rounded-full bg-[var(--color-accent-purple)] mx-auto mb-2" />
-          <div className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">
-            {data.summary.total}
-          </div>
-          <div className="text-xs text-[var(--color-text-muted)] mt-1">Total</div>
-        </div>
+      {/* Summary tiles */}
+      <div className="mb-6 grid grid-cols-3 gap-3 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)] p-5 sm:grid-cols-6">
+        <MetricTile label="Critical" value={data.summary.critical} tone={SEVERITY_TONE.critical} />
+        <MetricTile label="High" value={data.summary.high} tone={SEVERITY_TONE.high} />
+        <MetricTile label="Medium" value={data.summary.medium} tone={SEVERITY_TONE.medium} />
+        <MetricTile label="Low" value={data.summary.low} tone={SEVERITY_TONE.low} />
+        <MetricTile label="Info" value={data.summary.info} tone={SEVERITY_TONE.info} />
+        <MetricTile label="Total" value={data.summary.total} />
       </div>
 
       {/* Vulnerability items */}
       {sortedItems.length === 0 ? (
-        <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-10 text-center">
-          <ShieldAlert className="w-10 h-10 text-[var(--color-accent-green)] mx-auto mb-3" />
-          <h3 className="text-base font-medium text-[var(--color-text-primary)]">
-            No vulnerabilities found
-          </h3>
+        <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]">
+          <EmptyState icon={ShieldCheck} title="No vulnerabilities found" />
         </div>
       ) : (
         <div className="space-y-2">
-          {sortedItems.map((item, idx) => {
-            const style = SEVERITY_STYLES[item.severity];
-            return (
-              <div
-                key={`${item.name}-${idx}`}
-                className={`rounded-lg border border-[var(--color-border-default)] border-l-4 ${style.card} bg-[var(--color-bg-surface)] p-4 transition-colors hover:bg-[var(--color-bg-elevated)]`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium uppercase ${style.badge}`}
-                      >
-                        {item.severity}
-                      </span>
-                      <span className="font-medium text-[var(--color-text-primary)]">
-                        {item.name}
-                      </span>
-                    </div>
-                    <p className="text-sm text-[var(--color-text-secondary)]">
-                      {item.description}
-                    </p>
-                    {item.recommendation && (
-                      <p className="text-sm text-[var(--color-text-muted)] mt-2 pl-3 border-l-2 border-[var(--color-border-default)]">
-                        {item.recommendation}
-                      </p>
-                    )}
-                  </div>
-                </div>
+          {sortedItems.map((item, idx) => (
+            <div
+              key={`${item.name}-${idx}`}
+              className={`rounded-[var(--radius-panel)] border border-l-4 border-[var(--color-line)] ${SEVERITY_BORDER[item.severity]} bg-[var(--color-panel)] p-4 transition-colors hover:bg-[var(--color-panel-raised)]`}
+            >
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <SeverityBadge severity={item.severity} />
+                <span className="font-medium text-[var(--color-ink)]">{item.name}</span>
               </div>
-            );
-          })}
+              <p className="text-sm text-[var(--color-ink-muted)]">{item.description}</p>
+              {item.recommendation && (
+                <p className="mt-2 border-l-2 border-[var(--color-line)] pl-3 text-sm text-[var(--color-ink-faint)]">
+                  {item.recommendation}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>

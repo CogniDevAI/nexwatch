@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import type uPlot from "uplot";
 import {
@@ -21,10 +21,22 @@ import {
   Box,
   Monitor,
   FileCode2,
+  BellRing,
+  BellOff,
+  Bug,
+  ScrollText,
+  ArrowUpCircle,
 } from "lucide-react";
 import pb from "@/lib/pocketbase";
+import { apiFetch } from "@/lib/api";
+import { timeSince } from "@/lib/time";
 import type { Agent, MetricsResponse } from "@/types";
-import { agentStatus } from "@/lib/agent";
+import { useFleetHealth } from "@/hooks/useFleetHealth";
+import { useAuthStore } from "@/stores/authStore";
+import { useAgentUpdateInfo } from "@/hooks/useAgentUpdateInfo";
+import { updateAvailable } from "@/lib/agentUpdates";
+import { UpdateAvailableBadge, UpdateStatusChip } from "@/components/agents/UpdateBadges";
+import { UpdateAgentModal } from "@/components/agents/UpdateAgentModal";
 import { MetricChart } from "@/components/charts/MetricChart";
 import { TimeRangeSelector } from "@/components/charts/TimeRangeSelector";
 import { DockerTab } from "@/components/server/DockerTab";
@@ -32,21 +44,51 @@ import { PortsTab } from "@/components/server/PortsTab";
 import { ServicesTab } from "@/components/server/ServicesTab";
 import { HardeningTab } from "@/components/server/HardeningTab";
 import { VulnerabilitiesTab } from "@/components/server/VulnerabilitiesTab";
+import { CveScanTab } from "@/components/server/CveScanTab";
+import { LogsTab } from "@/components/server/LogsTab";
 import { SystemTab } from "@/components/server/SystemTab";
 import { ThreadDumpsTab } from "@/components/server/ThreadDumpsTab";
 import { OracleTab } from "@/components/server/OracleTab";
+import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { PlatformUnsupportedState } from "@/components/ui/PlatformUnsupportedState";
+import { Tabs } from "@/components/ui/Tabs";
+import { PlatformIcon } from "@/components/ui/PlatformIcon";
+import { Panel } from "@/components/ui/Panel";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { Button } from "@/components/ui/Button";
+import { TagChips } from "@/components/ui/TagChips";
+import { AckControl } from "@/components/alerts/AckControl";
+import { SilencedBadge, EscalatedBadge } from "@/components/alerts/AlertBadges";
+import { SilenceForm } from "@/components/silences/SilenceForm";
+import { usePageTitle } from "@/hooks/usePageTitle";
 
-type Tab = "metrics" | "docker" | "ports" | "system" | "services" | "hardening" | "vulnerabilities" | "threaddumps" | "oracle";
+type Tab =
+  | "metrics"
+  | "alerts"
+  | "logs"
+  | "docker"
+  | "ports"
+  | "system"
+  | "services"
+  | "hardening"
+  | "vulnerabilities"
+  | "cve"
+  | "threaddumps"
+  | "oracle";
 
 const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "metrics", label: "Metrics", icon: Activity },
+  { key: "alerts", label: "Alerts", icon: BellRing },
+  { key: "logs", label: "Logs", icon: ScrollText },
   { key: "docker", label: "Docker", icon: Container },
   { key: "ports", label: "Ports", icon: Wifi },
   { key: "system", label: "System", icon: Monitor },
   { key: "services", label: "Services", icon: ListTree },
   { key: "hardening", label: "Hardening", icon: Shield },
-  { key: "vulnerabilities", label: "Vulns", icon: ShieldAlert },
-  { key: "threaddumps", label: "Thread Dumps", icon: FileCode2 },
+  { key: "vulnerabilities", label: "Misconfigurations", icon: ShieldAlert },
+  { key: "cve", label: "CVE scan", icon: Bug },
+  { key: "threaddumps", label: "Thread dumps", icon: FileCode2 },
   { key: "oracle", label: "Oracle DB", icon: Database },
 ];
 
@@ -64,6 +106,36 @@ const TIME_RANGE_DURATIONS: Record<string, number> = {
 /** Generate mock empty chart data when no metrics are available */
 function emptyTimeSeries(): uPlot.AlignedData {
   return [[], []];
+}
+
+/**
+ * The hub reports network_rx/network_tx as a cumulative byte counter
+ * (converted to MB) since the agent started, not a rate — so charting the
+ * raw values directly produces an ever-climbing line mislabeled "MB/s".
+ * This derives an actual MB/s rate from consecutive samples, clamping a
+ * negative delta (the counter reset on an agent restart) to zero.
+ */
+function toNetworkRateSeries(
+  rx: { timestamps: number[]; values: number[] } | undefined,
+  tx: { timestamps: number[]; values: number[] } | undefined,
+): uPlot.AlignedData {
+  if (!rx || !tx || rx.timestamps.length < 2) return emptyTimeSeries();
+
+  const timestamps: number[] = [];
+  const rxRates: number[] = [];
+  const txRates: number[] = [];
+
+  for (let i = 1; i < rx.timestamps.length; i++) {
+    const dt = rx.timestamps[i]! - rx.timestamps[i - 1]!;
+    if (dt <= 0) continue;
+    const rxDelta = rx.values[i]! - rx.values[i - 1]!;
+    const txDelta = tx.values[i]! - tx.values[i - 1]!;
+    timestamps.push(rx.timestamps[i]!);
+    rxRates.push(rxDelta > 0 ? rxDelta / dt : 0);
+    txRates.push(txDelta > 0 ? txDelta / dt : 0);
+  }
+
+  return [timestamps, rxRates, txRates];
 }
 
 interface HardwareInfo {
@@ -102,6 +174,26 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
+/** One labeled fact in the host meta row — replaces middle-dot-joined strings
+ *  with explicit label/value pairs. See DESIGN.md §6. */
+function MetaField({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label?: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <span className="flex items-center gap-1.5 text-sm">
+      <Icon className="h-3.5 w-3.5 text-[var(--color-ink-faint)]" aria-hidden="true" />
+      {label && <span className="text-[var(--color-ink-faint)]">{label}</span>}
+      <span className="text-[var(--color-ink-muted)]">{value}</span>
+    </span>
+  );
+}
+
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -113,6 +205,22 @@ export function ServerDetail() {
   const [metricsLoading, setMetricsLoading] = useState(false);
   const metricsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeRangeRef = useRef(timeRange);
+  // Same alert-derived status used everywhere else — see DESIGN.md §3 ("one
+  // status source of truth"). Pure read; agents/alerts are fetched and
+  // subscribed once by AppShell.
+  const { statusByAgentId, activeAlerts, activeAlertsLoading, activeAlertsError } =
+    useFleetHealth();
+  const canManage = useAuthStore((s) => s.hasRole("operator"));
+  const [showSilenceForm, setShowSilenceForm] = useState(false);
+  const { compareVersion } = useAgentUpdateInfo();
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+
+  const hostAlerts = useMemo(
+    () => activeAlerts.filter((a) => a.agentId === id),
+    [activeAlerts, id],
+  );
+
+  usePageTitle(agent?.hostname || agent?.name || "Server");
 
   // Keep ref in sync for interval callback
   useEffect(() => {
@@ -130,9 +238,7 @@ export function ServerDetail() {
 
         // Fetch hardware info alongside agent data
         try {
-          const hwResponse = await fetch(`/api/custom/agents/${id}/hardware`, {
-            headers: { Authorization: pb.authStore.token },
-          });
+          const hwResponse = await apiFetch(`/api/custom/agents/${id}/hardware`);
           if (hwResponse.ok) {
             const hwData = (await hwResponse.json()) as HardwareInfo;
             setHardware(hwData);
@@ -147,7 +253,23 @@ export function ServerDetail() {
       }
     }
 
-    fetchAgent();
+    void fetchAgent();
+
+    // Live-update this one agent record — needed so the update_status/
+    // update_error chip in the header reflects a self-update's progress
+    // without a manual refresh. Scoped to this single record id (rather
+    // than the "*" wildcard useAgentStore subscribes to for the
+    // Agents/Dashboard pages) since this page only ever needs one agent
+    // and already owns its own `agent` state independent of that store.
+    const unsubscribePromise = pb.collection("agents").subscribe<Agent>(id, (event) => {
+      if (event.action === "update") {
+        setAgent(event.record);
+      }
+    });
+
+    return () => {
+      void unsubscribePromise.then((unsub) => unsub());
+    };
   }, [id]);
 
   // Fetch metrics
@@ -156,9 +278,8 @@ export function ServerDetail() {
       if (!id) return;
       if (showLoading) setMetricsLoading(true);
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `/api/custom/metrics?agent_id=${id}&start=${start}&end=${end}`,
-          { headers: { Authorization: pb.authStore.token } },
         );
         if (response.ok) {
           const data = (await response.json()) as MetricsResponse;
@@ -179,13 +300,13 @@ export function ServerDetail() {
     // Initial fetch
     const end = Math.floor(Date.now() / 1000);
     const start = end - 3600; // 1h default
-    fetchMetrics(start, end);
+    void fetchMetrics(start, end);
 
     // Set up polling interval
     metricsIntervalRef.current = setInterval(() => {
       const now = Math.floor(Date.now() / 1000);
       const duration = TIME_RANGE_DURATIONS[timeRangeRef.current] ?? 3600;
-      fetchMetrics(now - duration, now, false);
+      void fetchMetrics(now - duration, now, false);
     }, METRICS_REFRESH_INTERVAL);
 
     return () => {
@@ -193,13 +314,9 @@ export function ServerDetail() {
     };
   }, [fetchMetrics]);
 
-  function handleTimeRangeChange(range: {
-    value: string;
-    start: number;
-    end: number;
-  }) {
+  function handleTimeRangeChange(range: { value: string; start: number; end: number }) {
     setTimeRange(range.value);
-    fetchMetrics(range.start, range.end);
+    void fetchMetrics(range.start, range.end);
   }
 
   /** Convert TimeSeries to uPlot data format */
@@ -212,249 +329,305 @@ export function ServerDetail() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Activity className="w-6 h-6 text-[var(--color-accent-cyan)] animate-pulse" />
-        <span className="ml-3 text-[var(--color-text-secondary)]">
-          Loading server...
-        </span>
+      <div className="space-y-4">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-10 w-full max-w-2xl" />
       </div>
     );
   }
 
   if (!agent) {
     return (
-      <div className="text-center py-20">
-        <MonitorSmartphone className="w-12 h-12 text-[var(--color-text-muted)] mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-[var(--color-text-primary)] mb-2">
-          Agent not found
-        </h3>
-        <p className="text-sm text-[var(--color-text-secondary)] mb-6">
-          The agent with ID <code className="text-[var(--color-accent-cyan)]">{id}</code> does not exist.
-        </p>
-        <Link
-          to="/"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-accent-cyan)] text-[var(--color-bg-primary)] text-sm font-medium hover:opacity-90 transition-opacity"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Dashboard
-        </Link>
-      </div>
+      <Panel>
+        <EmptyState
+          icon={MonitorSmartphone}
+          title="Agent not found"
+          description={`The agent with ID "${id}" does not exist.`}
+          action={
+            <Link
+              to="/"
+              className="inline-flex items-center gap-2 rounded-[var(--radius-control)] bg-[var(--color-signal)] px-4 py-2 text-sm font-medium text-[var(--color-void)] transition-opacity hover:opacity-90"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to dashboard
+            </Link>
+          }
+        />
+      </Panel>
     );
   }
+
+  const status = statusByAgentId.get(agent.id) ?? "offline";
 
   return (
     <div>
       {/* Breadcrumb */}
       <Link
         to="/"
-        className="inline-flex items-center gap-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-accent-cyan)] transition-colors mb-4"
+        className="mb-4 inline-flex items-center gap-1.5 text-sm text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-signal)]"
       >
-        <ArrowLeft className="w-4 h-4" />
+        <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         Dashboard
       </Link>
 
       {/* Header */}
-      <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-6 mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <h2 className="text-2xl font-bold text-[var(--color-text-primary)]">
-                {agent.hostname || agent.name}
-              </h2>
-              <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                  agentStatus(agent) === "online"
-                    ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
-                    : "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]"
-                }`}
-              >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    agentStatus(agent) === "online"
-                      ? "bg-[var(--color-accent-green)]"
-                      : "bg-[var(--color-accent-red)]"
-                  }`}
-                />
-                {agentStatus(agent)}
-              </span>
-            </div>
-            {/* Row 1: always shown — from agent record */}
-            <div className="flex flex-wrap items-center gap-4 text-sm text-[var(--color-text-secondary)]">
-              <span className="flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5" />
-                {agent.ip || "No IP"}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Cpu className="w-3.5 h-3.5" />
-                {hardware?.platform
-                  ? `${hardware.platform}${hardware.platform_version ? ` ${hardware.platform_version}` : ""}`
-                  : agent.os || "Unknown OS"}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <HardDrive className="w-3.5 h-3.5" />
-                v{agent.version || "0.0.0"}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5" />
-                Last seen:{" "}
-                {agent.last_seen
-                  ? new Date(agent.last_seen).toLocaleString()
-                  : "Never"}
-              </span>
-            </div>
-
-            {/* Row 2: shown only when hardware data is available */}
-            {hardware && (
-              <div className="flex flex-wrap items-center gap-4 text-sm mt-1">
-                {hardware.kernel && (
-                  <span className="flex items-center gap-1.5">
-                    <Server className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                    <span className="text-[var(--color-text-muted)]">Kernel:</span>
-                    <span className="text-[var(--color-text-secondary)]">{hardware.kernel}</span>
-                  </span>
-                )}
-                {(hardware.cpu_logical ?? 0) > 0 && (
-                  <span className="flex items-center gap-1.5">
-                    <Cpu className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                    <span className="text-[var(--color-text-muted)]">Cores:</span>
-                    <span className="text-[var(--color-text-secondary)]">
-                      {hardware.cpu_logical}
-                      {hardware.cpu_physical && hardware.cpu_physical !== hardware.cpu_logical
-                        ? ` (${hardware.cpu_physical} physical)`
-                        : ""}
-                    </span>
-                  </span>
-                )}
-                {(hardware.total_ram ?? 0) > 0 && (
-                  <span className="flex items-center gap-1.5">
-                    <Database className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                    <span className="text-[var(--color-text-muted)]">RAM:</span>
-                    <span className="text-[var(--color-text-secondary)]">{formatBytes(hardware.total_ram!)}</span>
-                  </span>
-                )}
-                {(hardware.uptime ?? 0) > 0 && (
-                  <span className="flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                    <span className="text-[var(--color-text-muted)]">Uptime:</span>
-                    <span className="text-[var(--color-text-secondary)]">{formatUptime(hardware.uptime!)}</span>
-                  </span>
-                )}
-                {hardware.load1 !== undefined && (
-                  <span className="flex items-center gap-1.5">
-                    <BarChart2 className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                    <span className="text-[var(--color-text-muted)]">Load:</span>
-                    <span className="text-[var(--color-text-secondary)]">
-                      {hardware.load1.toFixed(2)} / {(hardware.load5 ?? 0).toFixed(2)} / {(hardware.load15 ?? 0).toFixed(2)}
-                    </span>
-                  </span>
-                )}
-                {(hardware.procs ?? 0) > 0 && (
-                  <span className="flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                    <span className="text-[var(--color-text-secondary)]">{hardware.procs} processes</span>
-                  </span>
-                )}
-                {hardware.arch && (
-                  <span className="flex items-center gap-1.5">
-                    <Box className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                    <span className="text-[var(--color-text-muted)]">Arch:</span>
-                    <span className="text-[var(--color-text-secondary)]">{hardware.arch}</span>
-                  </span>
-                )}
-              </div>
+      <Panel className="mb-6 p-6">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-2xl font-bold text-[var(--color-ink)]">
+              {agent.hostname || agent.name}
+            </h2>
+            <StatusIndicator status={status} />
+            <TagChips tags={agent.tags ?? []} />
+            {updateAvailable(agent, compareVersion) && (
+              <UpdateAvailableBadge targetVersion={compareVersion} />
+            )}
+            <UpdateStatusChip
+              status={agent.update_status}
+              error={agent.update_error}
+              onRetry={canManage ? () => setShowUpdateModal(true) : undefined}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {canManage && updateAvailable(agent, compareVersion) && (
+              <Button size="sm" variant="secondary" onClick={() => setShowUpdateModal(true)}>
+                <ArrowUpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                Update agent
+              </Button>
+            )}
+            {canManage && (
+              <Button size="sm" variant="secondary" onClick={() => setShowSilenceForm(true)}>
+                <BellOff className="h-3.5 w-3.5" aria-hidden="true" />
+                Silence this host
+              </Button>
             )}
           </div>
         </div>
-      </div>
 
-      {/* Tab bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-        <div className="overflow-x-auto -mx-1 px-1 scrollbar-thin">
-          <div className="inline-flex gap-1 rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-1 min-w-max">
-            {TABS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => setActiveTab(key)}
-                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-medium transition-all duration-150 whitespace-nowrap ${
-                  activeTab === key
-                    ? "bg-[var(--color-accent-cyan)]/15 text-[var(--color-accent-cyan)]"
-                    : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {label}
-              </button>
-            ))}
-          </div>
+        {/* Row 1: always shown — from agent record */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+          <MetaField icon={Globe} value={agent.ip || "No IP"} />
+          {/* OS/platform: uses PlatformIcon (windows/linux/darwin glyph)
+              instead of MetaField's generic icon slot, matching the same
+              glyph shown next to this agent's OS in the Agents table. */}
+          <span className="flex items-center gap-1.5 text-sm">
+            <PlatformIcon platform={agent.platform} />
+            <span className="text-[var(--color-ink-muted)]">
+              {hardware?.platform
+                ? `${hardware.platform}${hardware.platform_version ? ` ${hardware.platform_version}` : ""}`
+                : agent.os || "Unknown OS"}
+            </span>
+          </span>
+          <MetaField icon={HardDrive} value={`v${agent.version || "0.0.0"}`} />
+          <MetaField
+            icon={Clock}
+            label="Last seen:"
+            value={agent.last_seen ? new Date(agent.last_seen).toLocaleString() : "Never"}
+          />
         </div>
 
-        {activeTab === "metrics" && (
-          <TimeRangeSelector
-            selected={timeRange}
-            onChange={handleTimeRangeChange}
-          />
+        {/* Row 2: shown only when hardware data is available */}
+        {hardware && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5">
+            {hardware.kernel && <MetaField icon={Server} label="Kernel:" value={hardware.kernel} />}
+            {(hardware.cpu_logical ?? 0) > 0 && (
+              <MetaField
+                icon={Cpu}
+                label="Cores:"
+                value={
+                  hardware.cpu_physical && hardware.cpu_physical !== hardware.cpu_logical
+                    ? `${hardware.cpu_logical} (${hardware.cpu_physical} physical)`
+                    : hardware.cpu_logical
+                }
+              />
+            )}
+            {(hardware.total_ram ?? 0) > 0 && (
+              <MetaField icon={Database} label="RAM:" value={formatBytes(hardware.total_ram!)} />
+            )}
+            {(hardware.uptime ?? 0) > 0 && (
+              <MetaField icon={Activity} label="Uptime:" value={formatUptime(hardware.uptime!)} />
+            )}
+            {hardware.load1 !== undefined && (
+              <MetaField
+                icon={BarChart2}
+                label="Load:"
+                value={`${hardware.load1.toFixed(2)} / ${(hardware.load5 ?? 0).toFixed(2)} / ${(hardware.load15 ?? 0).toFixed(2)}`}
+              />
+            )}
+            {(hardware.procs ?? 0) > 0 && (
+              <MetaField icon={Layers} value={`${hardware.procs} processes`} />
+            )}
+            {hardware.arch && <MetaField icon={Box} label="Arch:" value={hardware.arch} />}
+          </div>
         )}
+      </Panel>
+
+      {/* Tab bar — full row width so a long tab list (twelve on this page)
+          scrolls within itself rather than sharing the row with anything
+          else and running out of space (R2 fix). The time range selector
+          only applies to the Metrics tab, so it now lives in that tab's own
+          content instead of competing with the tab bar for width. */}
+      <div className="mb-6 border-b border-[var(--color-line)]">
+        <Tabs
+          items={TABS}
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          aria-label="Server detail sections"
+          className="-mb-px"
+        />
       </div>
 
       {/* Tab content */}
       {activeTab === "metrics" && (
         <div>
-          {metricsLoading && (
-            <div className="flex items-center gap-2 mb-4 text-sm text-[var(--color-text-secondary)]">
-              <Activity className="w-4 h-4 animate-pulse text-[var(--color-accent-cyan)]" />
-              Refreshing metrics...
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="min-h-[1.25rem]">
+              {metricsLoading && (
+                <div className="flex items-center gap-2 text-sm text-[var(--color-ink-muted)]">
+                  <Activity
+                    className="h-4 w-4 animate-pulse text-[var(--color-signal)]"
+                    aria-hidden="true"
+                  />
+                  Refreshing metrics…
+                </div>
+              )}
             </div>
-          )}
+            <TimeRangeSelector selected={timeRange} onChange={handleTimeRangeChange} />
+          </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <MetricChart
-              title="CPU Usage"
+              title="CPU usage"
               data={toUPlotData(metrics?.cpu)}
               unit="%"
-              colors={["#06b6d4"]}
+              colors={["#5b9dff"]}
               seriesLabels={["CPU"]}
             />
             <MetricChart
-              title="Memory Usage"
+              title="Memory usage"
               data={toUPlotData(metrics?.memory)}
               unit="%"
-              colors={["#8b5cf6"]}
+              colors={["#34d399"]}
               seriesLabels={["Memory"]}
             />
             <MetricChart
-              title="Disk Usage"
+              title="Disk usage"
               data={toUPlotData(metrics?.disk)}
               unit="%"
-              colors={["#f59e0b"]}
+              colors={["#f5a524"]}
               seriesLabels={["Disk"]}
             />
             <MetricChart
               title="Network"
-              data={
-                metrics?.network_rx && metrics?.network_tx
-                  ? [
-                      metrics.network_rx.timestamps,
-                      metrics.network_rx.values,
-                      metrics.network_tx.values,
-                    ]
-                  : emptyTimeSeries()
-              }
+              data={toNetworkRateSeries(metrics?.network_rx, metrics?.network_tx)}
               unit="MB/s"
-              colors={["#10b981", "#8b5cf6"]}
+              colors={["#5b9dff", "#f5a524"]}
               seriesLabels={["RX", "TX"]}
             />
           </div>
         </div>
       )}
 
+      {activeTab === "alerts" && (
+        <Panel>
+          {activeAlertsLoading && hostAlerts.length === 0 ? (
+            <div className="p-5">
+              <Skeleton className="h-16 w-full" />
+            </div>
+          ) : activeAlertsError ? (
+            <EmptyState
+              icon={BellRing}
+              title="Couldn't load alerts"
+              description={activeAlertsError}
+            />
+          ) : hostAlerts.length === 0 ? (
+            <EmptyState icon={BellRing} title="No active alerts for this host" />
+          ) : (
+            <div className="divide-y divide-[var(--color-line-soft)]">
+              {hostAlerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className="flex flex-wrap items-center gap-3 px-5 py-3 sm:flex-nowrap sm:gap-4"
+                >
+                  <StatusIndicator status={alert.severity} dotOnly />
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-1.5 truncate text-sm font-medium text-[var(--color-ink)]">
+                      {alert.ruleName}
+                      {alert.count > 1 && (
+                        <span className="text-2xs rounded-[var(--radius-chip)] bg-[var(--color-panel-raised)] px-1.5 py-0.5 font-mono text-[var(--color-ink-faint)] tabular-nums">
+                          ×{alert.count}
+                        </span>
+                      )}
+                    </p>
+                    <p className="truncate text-xs text-[var(--color-ink-faint)]">
+                      {timeSince(alert.firedAt)}
+                    </p>
+                  </div>
+                  {alert.silenced && <SilencedBadge />}
+                  {alert.escalatedAt && <EscalatedBadge />}
+                  <AckControl
+                    alertId={alert.id}
+                    acknowledgedAt={alert.acknowledgedAt}
+                    acknowledgedBy={alert.acknowledgedBy}
+                    canManage={canManage}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      )}
+
+      {activeTab === "logs" && id && <LogsTab agentId={id} />}
       {activeTab === "docker" && id && <DockerTab agentId={id} />}
       {activeTab === "ports" && id && <PortsTab agentId={id} />}
-      {activeTab === "system" && id && <SystemTab agentId={id!} />}
+      {activeTab === "system" && id && <SystemTab agentId={id} />}
       {activeTab === "services" && id && <ServicesTab agentId={id} />}
       {activeTab === "hardening" && id && <HardeningTab agentId={id} />}
-      {activeTab === "vulnerabilities" && id && <VulnerabilitiesTab agentId={id} />}
+      {activeTab === "vulnerabilities" && id && (
+        // vulnerabilities (Misconfigurations) has no Windows implementation
+        // (internal/agent/platform.Supported) — a Windows agent never
+        // registers this collector, so its data is permanently absent
+        // rather than merely not-yet-reported. Show that plainly instead
+        // of the tab's normal loading/error/empty fetch cycle.
+        <>
+          {agent?.platform === "windows" ? (
+            <PlatformUnsupportedState feature="Misconfigurations" platform="Windows" />
+          ) : (
+            <VulnerabilitiesTab agentId={id} />
+          )}
+        </>
+      )}
+      {activeTab === "cve" && id && <CveScanTab agentId={id} />}
       {activeTab === "threaddumps" && id && <ThreadDumpsTab agentId={id} />}
-      {activeTab === "oracle" && id && <OracleTab agentId={id} />}
+      {activeTab === "oracle" && id && (
+        // oracle has no Windows implementation — see the vulnerabilities
+        // tab's identical comment above.
+        <>
+          {agent?.platform === "windows" ? (
+            <PlatformUnsupportedState feature="Oracle DB monitoring" platform="Windows" />
+          ) : (
+            <OracleTab agentId={id} />
+          )}
+        </>
+      )}
+
+      {showSilenceForm && (
+        <SilenceForm
+          initialAgentId={agent.id}
+          initialAgentHostname={agent.hostname || agent.name}
+          onSave={() => setShowSilenceForm(false)}
+          onClose={() => setShowSilenceForm(false)}
+        />
+      )}
+
+      {showUpdateModal && (
+        <UpdateAgentModal
+          agent={agent}
+          defaultVersion={compareVersion}
+          onClose={() => setShowUpdateModal(false)}
+        />
+      )}
     </div>
   );
 }

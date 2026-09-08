@@ -1,0 +1,259 @@
+/*
+ * Public status page tokens — see ui/DESIGN.md § Public status page.
+ *
+ * Deliberately NOT the app's own --color-* tokens (styles/globals.css):
+ * those are a fixed dark palette tuned for an ops dashboard. This page is
+ * read by customers, defaults to light, and follows the visitor's system
+ * theme via prefers-color-scheme — so it needs its own light+dark pair,
+ * scoped under .status-page rather than global, since every other route
+ * in this app stays dark-only.
+ */
+.status-page {
+  --sp-bg: #f7f8fa;
+  --sp-panel: #ffffff;
+  --sp-border: #e4e7ec;
+  --sp-ink: #101828;
+  --sp-ink-muted: #667085;
+  --sp-ok: #1a9c6e;
+  --sp-warn: #b5720a;
+  --sp-down: #d1373f;
+  --sp-unknown: #6b7280;
+  --sp-accent: #3b6fd6;
+  --sp-ok-bg: #e7f7f1;
+  --sp-warn-bg: #fdf1de;
+  --sp-down-bg: #fbe9ea;
+  --sp-unknown-bg: #f1f2f4;
+
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  background-color: var(--sp-bg);
+  color: var(--sp-ink);
+  font-family:
+    "IBM Plex Sans",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  .status-page {
+    --sp-bg: #0a0e16;
+    --sp-panel: #121926;
+    --sp-border: #232d3d;
+    --sp-ink: #e7ecf3;
+    --sp-ink-muted: #93a0b4;
+    --sp-ok: #34d399;
+    --sp-warn: #f5a524;
+    --sp-down: #f5484f;
+    --sp-unknown: #5b6576;
+    --sp-accent: #5b9dff;
+    --sp-ok-bg: rgba(52, 211, 153, 0.12);
+    --sp-warn-bg: rgba(245, 165, 36, 0.12);
+    --sp-down-bg: rgba(245, 72, 79, 0.12);
+    --sp-unknown-bg: rgba(91, 101, 118, 0.16);
+  }
+}
+
+.status-page__wrap {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 4rem;
+}
+
+.status-page__title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 0.375rem;
+  line-height: 1.3;
+}
+
+.status-page__description {
+  font-size: 0.9375rem;
+  color: var(--sp-ink-muted);
+  margin: 0 0 1.5rem;
+  line-height: 1.5;
+}
+
+.status-page__banner {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  margin-bottom: 1.75rem;
+}
+
+.status-page__banner--operational {
+  background: var(--sp-ok-bg);
+  color: var(--sp-ok);
+}
+.status-page__banner--degraded {
+  background: var(--sp-warn-bg);
+  color: var(--sp-warn);
+}
+.status-page__banner--down {
+  background: var(--sp-down-bg);
+  color: var(--sp-down);
+}
+.status-page__banner--unknown {
+  background: var(--sp-unknown-bg);
+  color: var(--sp-unknown);
+}
+
+.status-page__dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+.status-page__item {
+  padding: 1rem 0;
+  border-top: 1px solid var(--sp-border);
+}
+
+.status-page__item:first-child {
+  border-top: none;
+}
+
+.status-page__item-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.status-page__item-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  min-width: 0;
+}
+
+.status-page__item-name span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-page__item-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  color: var(--sp-ink-muted);
+}
+
+.status-page__item-status {
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.status-page__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 1.75rem;
+}
+
+.status-page__bar {
+  flex: 1 1 auto;
+  min-width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  cursor: default;
+  background: var(--sp-ok);
+  opacity: 0.85;
+}
+
+.status-page__bar[data-tone="degraded"] {
+  background: var(--sp-warn);
+}
+.status-page__bar[data-tone="down"] {
+  background: var(--sp-down);
+}
+.status-page__bar[data-tone="unknown"] {
+  background: var(--sp-unknown);
+  opacity: 0.5;
+}
+
+.status-page__bars-caption {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--sp-ink-muted);
+}
+
+.status-page__footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--sp-border);
+  font-size: 0.8125rem;
+  color: var(--sp-ink-muted);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.status-page__state {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--sp-ink-muted);
+}
+
+.status-page__state h1 {
+  color: var(--sp-ink);
+  font-size: 1.125rem;
+  margin: 0 0 0.5rem;
+}
+
+.status-page__retry {
+  margin-top: 1rem;
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--sp-border);
+  background: var(--sp-panel);
+  color: var(--sp-ink);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.status-page__skeleton {
+  padding: 1rem 0;
+}
+
+.status-page__skeleton-block {
+  height: 1rem;
+  border-radius: 0.25rem;
+  background: var(--sp-border);
+  opacity: 0.6;
+  margin-bottom: 0.75rem;
+  animation: status-page-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes status-page-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-page__skeleton-block {
+    animation: none;
+  }
+}

@@ -1,7 +1,8 @@
 import { useNavigate } from "react-router-dom";
 import { Monitor, Apple, Terminal } from "lucide-react";
 import type { Agent } from "@/types";
-import { agentStatus } from "@/lib/agent";
+import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import type { Status } from "@/components/ui/status";
 
 export interface AgentMetricsSummary {
   cpu: number;
@@ -11,114 +12,96 @@ export interface AgentMetricsSummary {
 
 interface ServerCardProps {
   agent: Agent;
+  /** Alert-derived status from the shared fleet-health layer — see
+   *  DESIGN.md §3 ("one status source of truth"). Never derive connectivity
+   *  status locally here. */
+  status: Status;
   metrics?: AgentMetricsSummary;
 }
+
+const BORDER_CLASS: Record<Status, string> = {
+  ok: "border-l-[var(--color-ok)]",
+  warning: "border-l-[var(--color-warn)]",
+  critical: "border-l-[var(--color-critical)]",
+  offline: "border-l-[var(--color-offline)]",
+};
 
 function OsIcon({ os }: { os: string }) {
   const normalized = os.toLowerCase();
   if (normalized.includes("darwin") || normalized.includes("mac")) {
-    return <Apple className="w-4 h-4" />;
+    return <Apple className="h-4 w-4" aria-hidden="true" />;
   }
-  return <Terminal className="w-4 h-4" />;
+  return <Terminal className="h-4 w-4" aria-hidden="true" />;
 }
 
-function StatusDot({ status }: { status: "online" | "offline" }) {
-  return (
-    <span className="relative flex h-2.5 w-2.5">
-      {status === "online" && (
-        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--color-accent-green)] opacity-75" />
-      )}
-      <span
-        className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-          status === "online"
-            ? "bg-[var(--color-accent-green)]"
-            : "bg-[var(--color-accent-red)]"
-        }`}
-      />
-    </span>
-  );
+function usageColor(value: number): string {
+  if (value >= 90) return "var(--color-critical)";
+  if (value >= 75) return "var(--color-warn)";
+  return "var(--color-signal)";
 }
 
-function UsageBar({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
+function UsageBar({ label, value }: { label: string; value: number }) {
   const clamped = Math.min(Math.max(value, 0), 100);
   return (
     <div>
-      <div className="flex items-center justify-between text-xs mb-1">
-        <span className="text-[var(--color-text-secondary)]">{label}</span>
-        <span className="text-[var(--color-text-primary)] font-medium tabular-nums">
+      <div className="mb-1 flex items-center justify-between text-xs">
+        <span className="text-[var(--color-ink-muted)]">{label}</span>
+        <span className="font-mono font-medium text-[var(--color-ink)] tabular-nums">
           {clamped.toFixed(1)}%
         </span>
       </div>
-      <div className="h-1.5 w-full rounded-full bg-[var(--color-bg-primary)]">
+      <div className="h-1.5 w-full rounded-full bg-[var(--color-void)]">
         <div
           className="h-full rounded-full transition-all duration-500 ease-out"
-          style={{ width: `${clamped}%`, backgroundColor: color }}
+          style={{ width: `${clamped}%`, backgroundColor: usageColor(clamped) }}
         />
       </div>
     </div>
   );
 }
 
-export function ServerCard({ agent, metrics }: ServerCardProps) {
+export function ServerCard({ agent, status, metrics }: ServerCardProps) {
   const navigate = useNavigate();
 
   return (
     <button
       type="button"
       onClick={() => navigate(`/servers/${agent.id}`)}
-      className="w-full text-left rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-5 hover:border-[var(--color-accent-cyan)]/40 hover:bg-[var(--color-bg-elevated)] transition-all duration-200 cursor-pointer group"
+      className={`group w-full cursor-pointer rounded-[var(--radius-panel)] border border-l-4 border-[var(--color-line)] ${BORDER_CLASS[status]} bg-[var(--color-panel)] p-5 text-left transition-colors hover:bg-[var(--color-panel-raised)]`}
     >
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] flex items-center justify-center text-[var(--color-text-secondary)] group-hover:text-[var(--color-accent-cyan)] group-hover:border-[var(--color-accent-cyan)]/30 transition-colors">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-void)] text-[var(--color-ink-muted)] transition-colors group-hover:text-[var(--color-signal)]">
             {agent.os ? (
               <OsIcon os={agent.os} />
             ) : (
-              <Monitor className="w-5 h-5" />
+              <Monitor className="h-4 w-4" aria-hidden="true" />
             )}
           </div>
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
+            <h3 className="truncate text-sm font-semibold text-[var(--color-ink)]">
               {agent.hostname || agent.name}
             </h3>
-            <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">
+            <p className="mt-0.5 truncate font-mono text-xs text-[var(--color-ink-faint)]">
               {agent.ip || "No IP"}
             </p>
           </div>
         </div>
-        <StatusDot status={agentStatus(agent)} />
+        <StatusIndicator status={status} dotOnly />
       </div>
 
       {metrics && (
-        <div className="mt-3 pt-3 border-t border-[var(--color-border-muted)] flex flex-col gap-2">
-          <UsageBar label="CPU" value={metrics.cpu} color="var(--color-accent-cyan)" />
-          <UsageBar label="Memory" value={metrics.memory} color="var(--color-accent-purple)" />
-          <UsageBar label="Disk" value={metrics.disk} color="var(--color-accent-yellow)" />
+        <div className="mt-4 flex flex-col gap-2.5 border-t border-[var(--color-line-soft)] pt-3">
+          <UsageBar label="CPU" value={metrics.cpu} />
+          <UsageBar label="Memory" value={metrics.memory} />
+          <UsageBar label="Disk" value={metrics.disk} />
         </div>
       )}
 
       {!metrics && (
-        <div className="mt-3 pt-3 border-t border-[var(--color-border-muted)] flex items-center justify-between">
-          <span className="text-xs text-[var(--color-text-secondary)]">
-            {agent.os || "Unknown OS"}
-          </span>
-          <span
-            className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-              agentStatus(agent) === "online"
-                ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
-                : "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]"
-            }`}
-          >
-            {agentStatus(agent)}
-          </span>
+        <div className="mt-4 flex items-center justify-between border-t border-[var(--color-line-soft)] pt-3">
+          <span className="text-xs text-[var(--color-ink-muted)]">{agent.os || "Unknown OS"}</span>
+          <StatusIndicator status={status} />
         </div>
       )}
     </button>

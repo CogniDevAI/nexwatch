@@ -1,112 +1,259 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useMemo } from "react";
 import {
   Plus,
   Trash2,
+  RefreshCw,
   Copy,
   Check,
-  X,
   Server,
-  Wifi,
-  WifiOff,
-  Activity,
+  Tag as TagIcon,
+  ArrowUpCircle,
 } from "lucide-react";
 import type { Agent } from "@/types";
 import pb from "@/lib/pocketbase";
-import { agentStatus } from "@/lib/agent";
+import { apiFetch } from "@/lib/api";
+import { timeSince, formatDateTime } from "@/lib/time";
+import { updateAvailable } from "@/lib/agentUpdates";
+import { useAuthStore } from "@/stores/authStore";
+import { useAgentStore } from "@/stores/agentStore";
+import { useFleetHealth } from "@/hooks/useFleetHealth";
+import { useAgentUpdateInfo } from "@/hooks/useAgentUpdateInfo";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Panel, PanelBody } from "@/components/ui/Panel";
+import { FleetStrip } from "@/components/ui/FleetStrip";
+import { Table, Th, Td } from "@/components/ui/Table";
+import { rowClass } from "@/components/ui/rowClass";
+import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import { PlatformIcon } from "@/components/ui/PlatformIcon";
+import { Tabs } from "@/components/ui/Tabs";
+import { Modal } from "@/components/ui/Modal";
+import { Input, Label } from "@/components/ui/Field";
+import { TagInput } from "@/components/ui/TagInput";
+import { TagChips, TagFilterBar } from "@/components/ui/TagChips";
+import { Button, IconButton } from "@/components/ui/Button";
+import { Menu } from "@/components/ui/Menu";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { usePageTitle } from "@/hooks/usePageTitle";
+import { UpdateAvailableBadge, UpdateStatusChip } from "@/components/agents/UpdateBadges";
+import { UpdateAgentModal } from "@/components/agents/UpdateAgentModal";
+import { UpdateAllModal } from "@/components/agents/UpdateAllModal";
+import type { TabItem } from "@/components/ui/Tabs";
 
-function generateToken(length = 32): string {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  const array = new Uint8Array(length);
-  crypto.getRandomValues(array);
-  return Array.from(array, (b) => chars[b % chars.length]).join("");
+type InstallOS = "linux" | "windows";
+
+// Thin per-OS wrappers so PlatformIcon (which takes a "platform" prop, not
+// just "className") fits Tabs' generic `icon: ComponentType<{className}>`
+// shape.
+function LinuxTabIcon({ className }: { className?: string }) {
+  return <PlatformIcon platform="linux" className={className} />;
+}
+function WindowsTabIcon({ className }: { className?: string }) {
+  return <PlatformIcon platform="windows" className={className} />;
 }
 
-function formatDate(dateStr: string): string {
-  if (!dateStr) return "Never";
-  try {
-    return new Date(dateStr).toLocaleString();
-  } catch {
-    return dateStr;
+const OS_TABS: TabItem<InstallOS>[] = [
+  { key: "linux", label: "Linux", icon: LinuxTabIcon },
+  { key: "windows", label: "Windows", icon: WindowsTabIcon },
+];
+
+interface AgentActionsProps {
+  agent: Agent;
+  canManage: boolean;
+  compareVersion: string;
+  deleteConfirm: string | null;
+  regeneratingId: string | null;
+  onUpdate: (agent: Agent) => void;
+  onEditTags: (agent: Agent) => void;
+  onRegenerateToken: (agentId: string) => void;
+  onDeleteRequest: (agentId: string) => void;
+  onDeleteConfirm: (agentId: string) => void;
+  onDeleteCancel: () => void;
+}
+
+/**
+ * Row actions shared by the Agents desktop table cell and mobile card
+ * footer. Defined at module scope (not nested inside `Agents()`, as it
+ * originally was) so React keeps the same component identity across
+ * re-renders — a component recreated inline on every parent render gets a
+ * fresh function-type identity each time, which React treats as a type
+ * change and remounts, silently discarding any state owned by a descendant
+ * like `Menu`'s open/closed flag. That bug was invisible before the R2
+ * overflow-menu fix (the row's only other transient state, `deleteConfirm`,
+ * already lived in the parent), but became a real, visible defect — the
+ * "More actions" menu would appear to close itself — once `Menu` owned its
+ * own local state. See DESIGN.md §7/"Row action overflow".
+ *
+ * Four labeled ghost buttons don't fit a row at desktop table widths or on
+ * a 390px mobile card (R2 fix). Update and Edit tags stay direct, visible
+ * actions — they're the ones reached most often — while Regenerate token
+ * and Delete move into a "More actions" overflow menu. This one action set
+ * is shared by both layouts, so the fix applies to both at once.
+ */
+function AgentActions({
+  agent,
+  canManage,
+  compareVersion,
+  deleteConfirm,
+  regeneratingId,
+  onUpdate,
+  onEditTags,
+  onRegenerateToken,
+  onDeleteRequest,
+  onDeleteConfirm,
+  onDeleteCancel,
+}: AgentActionsProps) {
+  if (!canManage) return <span className="text-xs text-[var(--color-ink-faint)]">—</span>;
+
+  if (deleteConfirm === agent.id) {
+    return (
+      <div className="flex items-center justify-end gap-1">
+        <Button size="sm" variant="danger" onClick={() => onDeleteConfirm(agent.id)}>
+          Confirm
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onDeleteCancel}>
+          Cancel
+        </Button>
+      </div>
+    );
   }
-}
 
-function timeSince(dateStr: string): string {
-  if (!dateStr) return "Never";
-  const seconds = Math.floor(
-    (Date.now() - new Date(dateStr).getTime()) / 1000,
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-1">
+      {updateAvailable(agent, compareVersion) && agent.status === "online" && (
+        <Button size="sm" variant="ghost" onClick={() => onUpdate(agent)}>
+          <ArrowUpCircle className="h-3.5 w-3.5" />
+          <span>Update</span>
+        </Button>
+      )}
+      <Button size="sm" variant="ghost" onClick={() => onEditTags(agent)}>
+        <TagIcon className="h-3.5 w-3.5" />
+        <span>Edit tags</span>
+      </Button>
+      <Menu
+        aria-label={`More actions for ${agent.hostname || agent.name || "this agent"}`}
+        items={[
+          {
+            label: regeneratingId === agent.id ? "Regenerating…" : "Regenerate token",
+            icon: RefreshCw,
+            onSelect: () => onRegenerateToken(agent.id),
+            disabled: regeneratingId === agent.id,
+          },
+          {
+            label: "Delete",
+            icon: Trash2,
+            onSelect: () => onDeleteRequest(agent.id),
+            danger: true,
+          },
+        ]}
+      />
+    </div>
   );
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 export function Agents() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [loading, setLoading] = useState(true);
+  usePageTitle("Agents");
+
+  const canManage = useAuthStore((s) => s.hasRole("operator"));
+  const canManageAll = useAuthStore((s) => s.hasRole("admin"));
+  // Agents are fetched and subscribed once by AppShell — this just reads the
+  // shared store, and useFleetHealth derives the same alert-aware status
+  // used everywhere else. See DESIGN.md §10 and §3 ("one status source of
+  // truth"). Mutations (create/delete/regenerate) still call pb directly;
+  // the shared subscription picks up the resulting realtime event.
+  const { agents, loading, error, fetchAgents } = useAgentStore();
+  const { fleet, statusByAgentId } = useFleetHealth();
+  const { compareVersion } = useAgentUpdateInfo();
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [newAgent, setNewAgent] = useState<{
     token: string;
     id: string;
   } | null>(null);
+  const [tokenFlow, setTokenFlow] = useState<"create" | "regenerate">("create");
   const [addingName, setAddingName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [installOS, setInstallOS] = useState<InstallOS>("linux");
+  const [editingTagsAgent, setEditingTagsAgent] = useState<Agent | null>(null);
+  const [tagsDraft, setTagsDraft] = useState<string[]>([]);
+  const [savingTags, setSavingTags] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [updatingAgent, setUpdatingAgent] = useState<Agent | null>(null);
+  const [showUpdateAllModal, setShowUpdateAllModal] = useState(false);
 
-  const fetchAgents = useCallback(async () => {
-    setLoading(true);
+  const outdatedAgents = useMemo(
+    () => agents.filter((a) => a.status === "online" && updateAvailable(a, compareVersion)),
+    [agents, compareVersion],
+  );
+
+  const allTags = useMemo(
+    () => Array.from(new Set(agents.flatMap((a) => a.tags ?? []))).sort(),
+    [agents],
+  );
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  };
+
+  const filteredAgents = useMemo(
+    () =>
+      selectedTags.size === 0
+        ? agents
+        : agents.filter((a) => (a.tags ?? []).some((t) => selectedTags.has(t))),
+    [agents, selectedTags],
+  );
+  const filteredAgentIds = useMemo(
+    () => new Set(filteredAgents.map((a) => a.id)),
+    [filteredAgents],
+  );
+  const filteredFleet = useMemo(
+    () => fleet.filter((f) => filteredAgentIds.has(f.id)),
+    [fleet, filteredAgentIds],
+  );
+
+  const handleOpenTagEditor = (agent: Agent) => {
+    setEditingTagsAgent(agent);
+    setTagsDraft(agent.tags ?? []);
+  };
+
+  const handleSaveTags = async () => {
+    if (!editingTagsAgent) return;
+    setSavingTags(true);
     try {
-      const records = await pb.collection("agents").getFullList<Agent>({
-        sort: "-last_seen",
-      });
-      setAgents(records);
+      await pb.collection("agents").update(editingTagsAgent.id, { tags: tagsDraft });
+      setEditingTagsAgent(null);
     } catch {
-      // Handle silently.
+      // Handle silently — the modal stays open so the operator can retry.
     } finally {
-      setLoading(false);
+      setSavingTags(false);
     }
-  }, []);
+  };
 
-  useEffect(() => {
-    fetchAgents();
-  }, [fetchAgents]);
-
-  // Real-time subscription for live status updates.
-  useEffect(() => {
-    const unsubPromise = pb
-      .collection("agents")
-      .subscribe<Agent>("*", (event) => {
-        switch (event.action) {
-          case "create":
-            setAgents((prev) => [event.record, ...prev]);
-            break;
-          case "update":
-            setAgents((prev) =>
-              prev.map((a) =>
-                a.id === event.record.id ? event.record : a,
-              ),
-            );
-            break;
-          case "delete":
-            setAgents((prev) =>
-              prev.filter((a) => a.id !== event.record.id),
-            );
-            break;
-        }
-      });
-
-    return () => {
-      unsubPromise.then((unsub) => unsub());
-    };
-  }, []);
+  // Requests a new (or rotated) token for an agent from the hub and returns
+  // the plaintext value. The hub never returns the token again after this.
+  const mintToken = async (agentId: string): Promise<string> => {
+    const res = await apiFetch(`/api/custom/agents/${agentId}/token`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      throw new Error("failed to generate token");
+    }
+    const data = (await res.json()) as { token: string };
+    return data.token;
+  };
 
   const handleAddAgent = async () => {
     if (!addingName.trim()) return;
     setCreating(true);
     try {
-      const token = generateToken();
       const record = await pb.collection("agents").create<Agent>({
         name: addingName.trim(),
         hostname: addingName.trim(),
@@ -114,9 +261,10 @@ export function Agents() {
         ip: "",
         version: "",
         status: "offline",
-        token,
         last_seen: "",
       });
+      const token = await mintToken(record.id);
+      setTokenFlow("create");
       setNewAgent({ token, id: record.id });
     } catch {
       // Handle silently.
@@ -125,10 +273,25 @@ export function Agents() {
     }
   };
 
+  const handleRegenerateToken = async (agentId: string) => {
+    setRegeneratingId(agentId);
+    try {
+      const token = await mintToken(agentId);
+      setTokenFlow("regenerate");
+      setNewAgent({ token, id: agentId });
+      setShowAddModal(true);
+    } catch {
+      // Handle silently.
+    } finally {
+      setRegeneratingId(null);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     try {
       await pb.collection("agents").delete(id);
-      setAgents((prev) => prev.filter((a) => a.id !== id));
+      // No local state to patch — the shared subscription (owned by
+      // AppShell) picks up the delete event and updates the store.
       setDeleteConfirm(null);
     } catch {
       // Handle silently.
@@ -150,6 +313,7 @@ export function Agents() {
     setNewAgent(null);
     setAddingName("");
     setCopied(false);
+    setInstallOS("linux");
   };
 
   // Build hub WebSocket URL from current page location.
@@ -164,315 +328,440 @@ export function Agents() {
     ? `curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ${hubWsUrl} --token ${newAgent.token} --mode oracle --oracle-home /u01/app/oracle/product/19.3.0/dbhome1 --oracle-sid SIDNAME`
     : "";
 
-  const onlineCount = agents.filter((a) => agentStatus(a) === "online").length;
-  const offlineCount = agents.filter((a) => agentStatus(a) === "offline").length;
+  // Two-step download-then-run (Invoke-WebRequest, then dot-invoke the
+  // saved script) rather than a one-line `irm ... | iex` — an agent
+  // install needs an elevated (Administrator) PowerShell prompt, and
+  // piping straight into iex runs whatever the URL currently serves with
+  // no chance to read it first. install-agent.ps1's own header comment
+  // documents this same reasoning.
+  const installCommandWindows = newAgent
+    ? `Invoke-WebRequest -Uri https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.ps1 -OutFile install-agent.ps1\n.\\install-agent.ps1 -Hub ${hubWsUrl} -Token ${newAgent.token}`
+    : "";
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold">Agents</h2>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-[var(--color-accent-cyan)] text-[var(--color-bg-primary)] text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
-        >
-          <Plus className="w-4 h-4" />
-          Add Agent
-        </button>
-      </div>
+      <PageHeader
+        title="Agents"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {canManageAll && outdatedAgents.length > 0 && (
+              <Button variant="secondary" onClick={() => setShowUpdateAllModal(true)}>
+                <ArrowUpCircle className="h-4 w-4" aria-hidden="true" />
+                Update all outdated ({outdatedAgents.length})
+              </Button>
+            )}
+            {canManage && (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setTokenFlow("create");
+                  setShowAddModal(true);
+                }}
+              >
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Add agent
+              </Button>
+            )}
+          </div>
+        }
+      />
 
-      {/* Stats row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4">
-          <div className="flex items-center gap-3">
-            <div
-              className="w-9 h-9 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: "var(--color-accent-cyan)15" }}
-            >
-              <Server className="w-4 h-4 text-[var(--color-accent-cyan)]" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-[var(--color-text-primary)]">
-                {agents.length}
-              </p>
-              <p className="text-xs text-[var(--color-text-secondary)]">
-                Total Agents
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4">
-          <div className="flex items-center gap-3">
-            <div
-              className="w-9 h-9 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: "var(--color-accent-green)15" }}
-            >
-              <Wifi className="w-4 h-4 text-[var(--color-accent-green)]" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-[var(--color-text-primary)]">
-                {onlineCount}
-              </p>
-              <p className="text-xs text-[var(--color-text-secondary)]">
-                Online
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4">
-          <div className="flex items-center gap-3">
-            <div
-              className="w-9 h-9 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: "var(--color-accent-red)15" }}
-            >
-              <WifiOff className="w-4 h-4 text-[var(--color-accent-red)]" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-[var(--color-text-primary)]">
-                {offlineCount}
-              </p>
-              <p className="text-xs text-[var(--color-text-secondary)]">
-                Offline
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* Fleet health — same hero strip as the Dashboard. Skipped on error or
+          once we know there are zero agents, so the message below isn't
+          duplicated. Scoped by the tag filter below, same as Dashboard. */}
+      {(loading || (!error && agents.length > 0)) && (
+        <Panel className="mb-6 p-5">
+          {loading && agents.length === 0 ? (
+            <Skeleton className="h-9 w-full" />
+          ) : (
+            <FleetStrip agents={filteredFleet} size="lg" />
+          )}
+        </Panel>
+      )}
 
-      {/* Agents Table */}
-      <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] overflow-hidden">
-        {loading ? (
-          <div className="p-6 flex items-center justify-center">
-            <Activity className="w-5 h-5 text-[var(--color-accent-cyan)] animate-pulse" />
-            <span className="ml-3 text-sm text-[var(--color-text-secondary)]">
-              Loading agents...
-            </span>
+      {!loading && !error && agents.length > 0 && (
+        <TagFilterBar tags={allTags} selected={selectedTags} onToggle={toggleTag} />
+      )}
+
+      {/* Agents Table (desktop) / Cards (mobile) */}
+      {loading ? (
+        <Panel>
+          <div className="p-5">
+            <Skeleton className="h-40 w-full" />
           </div>
-        ) : agents.length === 0 ? (
-          <div className="p-10 text-center">
-            <Server className="w-12 h-12 text-[var(--color-text-muted)] mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-[var(--color-text-primary)] mb-2">
-              No agents registered
-            </h3>
-            <p className="text-sm text-[var(--color-text-secondary)] max-w-md mx-auto mb-4">
-              Add your first agent to start monitoring. Click "Add Agent" to
-              generate an install command.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+        </Panel>
+      ) : error ? (
+        <Panel>
+          <ErrorState
+            title="Couldn't load agents"
+            description={error}
+            action={
+              <Button variant="primary" size="sm" onClick={() => void fetchAgents()}>
+                Try again
+              </Button>
+            }
+          />
+        </Panel>
+      ) : agents.length === 0 ? (
+        <Panel>
+          <EmptyState
+            icon={Server}
+            title="No agents registered"
+            description="Add your first agent to start monitoring. Choose Add agent to generate an install command."
+          />
+        </Panel>
+      ) : filteredAgents.length === 0 ? (
+        <Panel>
+          <EmptyState
+            icon={Server}
+            title="No agents match the selected tags"
+            description="Clear a tag filter above to see more agents."
+          />
+        </Panel>
+      ) : (
+        <>
+          {/* Desktop table */}
+          <div className="hidden md:block">
+            <Table>
               <thead>
-                <tr className="border-b border-[var(--color-border-default)] text-[var(--color-text-muted)]">
-                  <th className="px-6 py-3 text-left font-medium">Status</th>
-                  <th className="px-6 py-3 text-left font-medium">
-                    Hostname
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium">IP</th>
-                  <th className="px-6 py-3 text-left font-medium">OS</th>
-                  <th className="px-6 py-3 text-left font-medium">Version</th>
-                  <th className="px-6 py-3 text-left font-medium">
-                    Last Seen
-                  </th>
-                  <th className="px-6 py-3 text-right font-medium">
+                <tr className="border-b border-[var(--color-line)]">
+                  <Th>Status</Th>
+                  <Th>Hostname</Th>
+                  <Th>Tags</Th>
+                  <Th>IP</Th>
+                  <Th>OS</Th>
+                  <Th className="whitespace-nowrap">Version</Th>
+                  <Th className="whitespace-nowrap">Last seen</Th>
+                  <Th align="right" className="whitespace-nowrap">
                     Actions
-                  </th>
+                  </Th>
                 </tr>
               </thead>
-              <tbody>
-                {agents.map((agent) => (
-                  <tr
-                    key={agent.id}
-                    className="border-b border-[var(--color-border-muted)] hover:bg-[var(--color-bg-elevated)]/50"
-                  >
-                    <td className="px-6 py-3">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${
-                          agentStatus(agent) === "online"
-                            ? "bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]"
-                            : "bg-[var(--color-text-muted)]/10 text-[var(--color-text-muted)]"
-                        }`}
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            agentStatus(agent) === "online"
-                              ? "bg-[var(--color-accent-green)]"
-                              : "bg-[var(--color-text-muted)]"
-                          }`}
-                        />
-                        {agentStatus(agent)}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 font-medium text-[var(--color-text-primary)]">
-                      {agent.hostname || agent.name || "Pending..."}
-                    </td>
-                    <td className="px-6 py-3 text-[var(--color-text-secondary)] font-mono text-xs">
+              <tbody className="divide-y divide-[var(--color-line-soft)]">
+                {filteredAgents.map((agent, idx) => (
+                  <tr key={agent.id} className={rowClass(idx)}>
+                    <Td>
+                      <StatusIndicator status={statusByAgentId.get(agent.id) ?? "offline"} />
+                    </Td>
+                    <Td className="font-medium">{agent.hostname || agent.name || "Pending…"}</Td>
+                    <Td>
+                      {(agent.tags ?? []).length > 0 ? (
+                        <TagChips tags={agent.tags ?? []} />
+                      ) : (
+                        <span className="text-[var(--color-ink-faint)]">—</span>
+                      )}
+                    </Td>
+                    <Td className="font-mono text-xs text-[var(--color-ink-muted)]">
                       {agent.ip || "—"}
-                    </td>
-                    <td className="px-6 py-3 text-[var(--color-text-secondary)]">
-                      {agent.os || "—"}
-                    </td>
-                    <td className="px-6 py-3">
-                      {agent.version ? (
-                        <span className="px-2 py-0.5 rounded bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] text-xs font-mono">
-                          {agent.version}
+                    </Td>
+                    <Td className="text-[var(--color-ink-muted)]">
+                      {agent.os ? (
+                        <span className="flex items-center gap-1.5">
+                          <PlatformIcon platform={agent.platform} />
+                          {agent.os}
                         </span>
                       ) : (
-                        <span className="text-[var(--color-text-muted)]">
-                          —
-                        </span>
+                        "—"
                       )}
-                    </td>
-                    <td className="px-6 py-3 text-[var(--color-text-muted)] whitespace-nowrap">
-                      <span title={formatDate(agent.last_seen)}>
+                    </Td>
+                    <Td>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {agent.version ? (
+                          <span className="rounded-[var(--radius-chip)] bg-[var(--color-panel-raised)] px-2 py-0.5 font-mono text-xs text-[var(--color-ink-muted)]">
+                            {agent.version}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--color-ink-faint)]">—</span>
+                        )}
+                        {updateAvailable(agent, compareVersion) && (
+                          <UpdateAvailableBadge targetVersion={compareVersion} />
+                        )}
+                        <UpdateStatusChip
+                          status={agent.update_status}
+                          error={agent.update_error}
+                          onRetry={canManage ? () => setUpdatingAgent(agent) : undefined}
+                        />
+                      </div>
+                    </Td>
+                    <Td className="text-xs whitespace-nowrap text-[var(--color-ink-faint)]">
+                      <span title={formatDateTime(agent.last_seen)}>
                         {timeSince(agent.last_seen)}
                       </span>
-                    </td>
-                    <td className="px-6 py-3 text-right">
-                      {deleteConfirm === agent.id ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => handleDelete(agent.id)}
-                            className="px-2 py-1 text-xs rounded bg-[var(--color-accent-red)] text-white"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirm(null)}
-                            className="px-2 py-1 text-xs rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)]"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setDeleteConfirm(agent.id)}
-                          className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-accent-red)] hover:bg-[var(--color-accent-red)]/10"
-                          title="Remove agent"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </td>
+                    </Td>
+                    <Td align="right">
+                      <AgentActions
+                        agent={agent}
+                        canManage={canManage}
+                        compareVersion={compareVersion}
+                        deleteConfirm={deleteConfirm}
+                        regeneratingId={regeneratingId}
+                        onUpdate={setUpdatingAgent}
+                        onEditTags={handleOpenTagEditor}
+                        onRegenerateToken={(id) => void handleRegenerateToken(id)}
+                        onDeleteRequest={setDeleteConfirm}
+                        onDeleteConfirm={(id) => void handleDelete(id)}
+                        onDeleteCancel={() => setDeleteConfirm(null)}
+                      />
+                    </Td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </div>
-        )}
-      </div>
 
-      {/* Add Agent Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-lg mx-4 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] shadow-2xl">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border-default)]">
-              <h3 className="text-lg font-semibold">
-                {newAgent ? "Agent Created" : "Add New Agent"}
-              </h3>
-              <button
-                onClick={handleCloseAddModal}
-                className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6">
-              {!newAgent ? (
-                /* Step 1: Enter agent name */
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">
-                      Agent Name
-                    </label>
-                    <input
-                      type="text"
-                      value={addingName}
-                      onChange={(e) => setAddingName(e.target.value)}
-                      placeholder="e.g., production-web-01"
-                      className="w-full px-3 py-2 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-accent-cyan)]"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleAddAgent();
-                      }}
+          {/* Mobile cards */}
+          <div className="space-y-3 md:hidden">
+            {filteredAgents.map((agent) => (
+              <Panel key={agent.id}>
+                <PanelBody className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-[var(--color-ink)]">
+                      {agent.hostname || agent.name || "Pending…"}
+                    </span>
+                    <StatusIndicator status={statusByAgentId.get(agent.id) ?? "offline"} />
+                  </div>
+                  {(agent.tags ?? []).length > 0 && <TagChips tags={agent.tags ?? []} />}
+                  <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
+                    <dt className="text-[var(--color-ink-faint)]">IP</dt>
+                    <dd className="text-right font-mono text-xs text-[var(--color-ink-muted)]">
+                      {agent.ip || "—"}
+                    </dd>
+                    <dt className="text-[var(--color-ink-faint)]">Version</dt>
+                    <dd className="text-right font-mono text-xs text-[var(--color-ink-muted)]">
+                      {agent.version || "—"}
+                    </dd>
+                    <dt className="text-[var(--color-ink-faint)]">Last seen</dt>
+                    <dd
+                      className="text-right text-xs text-[var(--color-ink-muted)]"
+                      title={formatDateTime(agent.last_seen)}
+                    >
+                      {timeSince(agent.last_seen)}
+                    </dd>
+                  </dl>
+                  {(updateAvailable(agent, compareVersion) || agent.update_status) && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {updateAvailable(agent, compareVersion) && (
+                        <UpdateAvailableBadge targetVersion={compareVersion} />
+                      )}
+                      <UpdateStatusChip
+                        status={agent.update_status}
+                        error={agent.update_error}
+                        onRetry={canManage ? () => setUpdatingAgent(agent) : undefined}
+                      />
+                    </div>
+                  )}
+                  <div className="border-t border-[var(--color-line-soft)] pt-3">
+                    <AgentActions
+                      agent={agent}
+                      canManage={canManage}
+                      compareVersion={compareVersion}
+                      deleteConfirm={deleteConfirm}
+                      regeneratingId={regeneratingId}
+                      onUpdate={setUpdatingAgent}
+                      onEditTags={handleOpenTagEditor}
+                      onRegenerateToken={(id) => void handleRegenerateToken(id)}
+                      onDeleteRequest={setDeleteConfirm}
+                      onDeleteConfirm={(id) => void handleDelete(id)}
+                      onDeleteCancel={() => setDeleteConfirm(null)}
                     />
                   </div>
-                  <div className="flex justify-end gap-3">
-                    <button
-                      onClick={handleCloseAddModal}
-                      className="px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] rounded-lg hover:bg-[var(--color-bg-elevated)]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleAddAgent}
-                      disabled={!addingName.trim() || creating}
-                      className="px-4 py-2 bg-[var(--color-accent-cyan)] text-[var(--color-bg-primary)] text-sm font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-                    >
-                      {creating ? "Creating..." : "Generate Token"}
-                    </button>
-                  </div>
+                </PanelBody>
+              </Panel>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Add Agent / Token Modal */}
+      {showAddModal && (
+        <Modal
+          title={
+            newAgent
+              ? tokenFlow === "regenerate"
+                ? "Token regenerated"
+                : "Agent created"
+              : "Add new agent"
+          }
+          onClose={handleCloseAddModal}
+        >
+          <div className="p-6">
+            {!newAgent ? (
+              /* Step 1: Enter agent name */
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="new-agent-name">Agent name</Label>
+                  <Input
+                    id="new-agent-name"
+                    type="text"
+                    value={addingName}
+                    onChange={(e) => setAddingName(e.target.value)}
+                    placeholder="e.g., production-web-01"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void handleAddAgent();
+                    }}
+                  />
                 </div>
-              ) : (
-                /* Step 2: Show install command */
-                <div className="space-y-4">
-                  <p className="text-sm text-[var(--color-accent-green)]">
-                    Agent token generated successfully. Copy the command for your server type:
-                  </p>
+                <div className="flex justify-end gap-3">
+                  <Button variant="ghost" onClick={handleCloseAddModal}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={handleAddAgent}
+                    disabled={!addingName.trim() || creating}
+                  >
+                    {creating ? "Creating…" : "Generate token"}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              /* Step 2: Show install command */
+              <div className="space-y-4">
+                <p className="flex items-center gap-2 text-sm text-[var(--color-ok)]">
+                  <Check className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                  Agent token generated. Copy the command for your server type.
+                </p>
 
-                  {/* Standard */}
-                  <div>
-                    <p className="text-xs font-semibold text-[var(--color-text-secondary)] mb-1.5">Standard (Linux)</p>
-                    <div className="relative">
-                      <pre className="p-4 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] text-[var(--color-text-primary)] text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
-                        {installCommand}
-                      </pre>
-                      <button
-                        onClick={() => handleCopy(installCommand)}
-                        className="absolute top-2 right-2 p-1.5 rounded-lg bg-[var(--color-bg-surface)] border border-[var(--color-border-default)] text-[var(--color-text-muted)] hover:text-[var(--color-accent-cyan)] transition-colors"
-                        title="Copy"
-                      >
-                        {copied ? <Check className="w-4 h-4 text-[var(--color-accent-green)]" /> : <Copy className="w-4 h-4" />}
-                      </button>
+                {/* OS tabs — same underline style/shared component as the
+                    host detail page's tab bar (DESIGN.md), not pills. */}
+                <Tabs
+                  items={OS_TABS}
+                  activeKey={installOS}
+                  onChange={setInstallOS}
+                  aria-label="Install command operating system"
+                  className="border-b border-[var(--color-line)]"
+                />
+
+                {installOS === "linux" ? (
+                  <>
+                    {/* Standard */}
+                    <div>
+                      <p className="mb-1.5 text-xs font-semibold text-[var(--color-ink-muted)]">
+                        Standard (Linux)
+                      </p>
+                      <div className="relative">
+                        <pre className="overflow-x-auto rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-void)] p-4 font-mono text-xs break-all whitespace-pre-wrap text-[var(--color-ink)]">
+                          {installCommand}
+                        </pre>
+                        <IconButton
+                          aria-label="Copy standard install command"
+                          onClick={() => handleCopy(installCommand)}
+                          className="absolute top-2 right-2 border border-[var(--color-line)] bg-[var(--color-panel)]"
+                        >
+                          {copied ? (
+                            <Check className="h-4 w-4 text-[var(--color-ok)]" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                        </IconButton>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Oracle */}
-                  <div>
-                    <p className="text-xs font-semibold text-[var(--color-text-secondary)] mb-1.5">Oracle DB (edit <code className="text-[var(--color-accent-yellow)]">--oracle-sid</code>)</p>
-                    <div className="relative">
-                      <pre className="p-4 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border-default)] text-[var(--color-text-primary)] text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
-                        {installCommandOracle}
-                      </pre>
-                      <button
-                        onClick={() => handleCopy(installCommandOracle)}
-                        className="absolute top-2 right-2 p-1.5 rounded-lg bg-[var(--color-bg-surface)] border border-[var(--color-border-default)] text-[var(--color-text-muted)] hover:text-[var(--color-accent-cyan)] transition-colors"
-                        title="Copy"
-                      >
-                        <Copy className="w-4 h-4" />
-                      </button>
+                    {/* Oracle */}
+                    <div>
+                      <p className="mb-1.5 text-xs font-semibold text-[var(--color-ink-muted)]">
+                        Oracle DB (edit{" "}
+                        <code className="text-[var(--color-warn)]">--oracle-sid</code>)
+                      </p>
+                      <div className="relative">
+                        <pre className="overflow-x-auto rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-void)] p-4 font-mono text-xs break-all whitespace-pre-wrap text-[var(--color-ink)]">
+                          {installCommandOracle}
+                        </pre>
+                        <IconButton
+                          aria-label="Copy Oracle install command"
+                          onClick={() => handleCopy(installCommandOracle)}
+                          className="absolute top-2 right-2 border border-[var(--color-line)] bg-[var(--color-panel)]"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </IconButton>
+                      </div>
                     </div>
-                  </div>
-
-                  <div className="rounded-lg bg-[var(--color-bg-elevated)] border border-[var(--color-border-muted)] p-3">
-                    <p className="text-xs text-[var(--color-text-muted)]">
-                      This token will only be shown once.
+                  </>
+                ) : (
+                  /* Windows: PowerShell, elevated (Administrator) prompt.
+                     Two-step download-then-run rather than `irm | iex` —
+                     see installCommandWindows's own comment above. */
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold text-[var(--color-ink-muted)]">
+                      PowerShell (run as Administrator)
                     </p>
+                    <div className="relative">
+                      <pre className="overflow-x-auto rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-void)] p-4 font-mono text-xs break-all whitespace-pre-wrap text-[var(--color-ink)]">
+                        {installCommandWindows}
+                      </pre>
+                      <IconButton
+                        aria-label="Copy Windows install command"
+                        onClick={() => handleCopy(installCommandWindows)}
+                        className="absolute top-2 right-2 border border-[var(--color-line)] bg-[var(--color-panel)]"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </IconButton>
+                    </div>
                   </div>
+                )}
 
-                  <div className="flex justify-end">
-                    <button
-                      onClick={handleCloseAddModal}
-                      className="px-4 py-2 bg-[var(--color-accent-cyan)] text-[var(--color-bg-primary)] text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
-                    >
-                      Done
-                    </button>
-                  </div>
+                <div className="rounded-[var(--radius-control)] border border-[var(--color-line-soft)] bg-[var(--color-panel-raised)] p-3">
+                  <p className="text-xs text-[var(--color-ink-faint)]">
+                    This token will only be shown once.
+                  </p>
                 </div>
-              )}
+
+                <div className="flex justify-end">
+                  <Button variant="primary" onClick={handleCloseAddModal}>
+                    Done
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit tags modal */}
+      {editingTagsAgent && (
+        <Modal
+          title={`Edit tags — ${editingTagsAgent.hostname || editingTagsAgent.name}`}
+          onClose={() => setEditingTagsAgent(null)}
+        >
+          <div className="space-y-4 p-6">
+            <div>
+              <Label htmlFor="agent-tags-input">Tags</Label>
+              <TagInput
+                id="agent-tags-input"
+                value={tagsDraft}
+                onChange={setTagsDraft}
+                suggestions={allTags}
+                placeholder="Add a tag…"
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => setEditingTagsAgent(null)}>
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={() => void handleSaveTags()} disabled={savingTags}>
+                {savingTags ? "Saving…" : "Save tags"}
+              </Button>
             </div>
           </div>
-        </div>
+        </Modal>
+      )}
+
+      {/* Update one agent */}
+      {updatingAgent && (
+        <UpdateAgentModal
+          agent={updatingAgent}
+          defaultVersion={compareVersion}
+          onClose={() => setUpdatingAgent(null)}
+        />
+      )}
+
+      {/* Update all outdated agents (admin) */}
+      {showUpdateAllModal && (
+        <UpdateAllModal
+          affectedAgents={outdatedAgents}
+          defaultVersion={compareVersion}
+          onClose={() => setShowUpdateAllModal(false)}
+        />
       )}
     </div>
   );

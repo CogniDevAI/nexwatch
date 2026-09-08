@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { FileCode2, Play, RefreshCw, Clock, CheckCircle, XCircle, Loader2, Copy, Check } from "lucide-react";
-import pb from "@/lib/pocketbase";
+import { FileCode2, Play, RefreshCw, Clock, Loader2, Copy, Check } from "lucide-react";
+import { apiFetch } from "@/lib/api";
+import { useAuthStore } from "@/stores/authStore";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
+import { Table, Th, Td } from "@/components/ui/Table";
+import { rowClass } from "@/components/ui/rowClass";
+import { StatusIndicator, type Status } from "@/components/ui/StatusIndicator";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
+import { useToast } from "@/components/ui/toastContext";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,31 +53,10 @@ function isJavaProcess(p: Process) {
   );
 }
 
-// ─── Status Badge ─────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: DumpSummary["status"] }) {
-  if (status === "pending") {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-accent-yellow)]/10 text-[var(--color-accent-yellow)]">
-        <Loader2 className="w-3 h-3 animate-spin" />
-        pending
-      </span>
-    );
-  }
-  if (status === "success") {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-accent-green)]/10 text-[var(--color-accent-green)]">
-        <CheckCircle className="w-3 h-3" />
-        success
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]">
-      <XCircle className="w-3 h-3" />
-      error
-    </span>
-  );
+function dumpStatus(status: DumpSummary["status"]): Status {
+  if (status === "pending") return "warning";
+  if (status === "success") return "ok";
+  return "critical";
 }
 
 // ─── Dump Viewer ──────────────────────────────────────────────────────────────
@@ -77,66 +65,60 @@ function DumpViewer({ dump, onClose }: { dump: DumpDetail; onClose: () => void }
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(dump.output).then(() => {
+    void navigator.clipboard.writeText(dump.output).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="relative w-full max-w-5xl max-h-[85vh] mx-4 rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] flex flex-col shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-border-default)]">
-          <div className="flex items-center gap-3">
-            <FileCode2 className="w-5 h-5 text-[var(--color-accent-cyan)]" />
-            <div>
-              <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-                Thread Dump — PID {dump.pid}
-                {dump.process_name && (
-                  <span className="ml-2 text-[var(--color-text-muted)] font-normal">({dump.process_name})</span>
-                )}
-              </p>
-              <p className="text-xs text-[var(--color-text-muted)]">{formatDate(dump.taken_at)}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleCopy}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--color-border-default)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] transition-colors"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-[var(--color-accent-green)]" /> : <Copy className="w-3.5 h-3.5" />}
-              {copied ? "Copied!" : "Copy"}
-            </button>
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--color-border-default)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] transition-colors"
-            >
-              Close
-            </button>
-          </div>
+    <Modal
+      title={
+        <>
+          Thread dump — PID {dump.pid}
+          {dump.process_name && (
+            <span className="ml-2 text-sm font-normal text-[var(--color-ink-faint)]">
+              ({dump.process_name})
+            </span>
+          )}
+        </>
+      }
+      onClose={onClose}
+      maxWidth="max-w-5xl"
+    >
+      <div className="flex max-h-[85vh] flex-col">
+        <div className="flex items-center justify-between border-b border-[var(--color-line)] px-6 py-2">
+          <p className="text-xs text-[var(--color-ink-faint)]">{formatDate(dump.taken_at)}</p>
+          <Button size="sm" onClick={handleCopy}>
+            {copied ? (
+              <Check className="h-3.5 w-3.5 text-[var(--color-ok)]" aria-hidden="true" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {copied ? "Copied" : "Copy"}
+          </Button>
         </div>
-
-        {/* Content */}
         <div className="flex-1 overflow-auto p-4">
           {dump.status === "error" ? (
-            <div className="rounded-lg bg-[var(--color-accent-red)]/10 border border-[var(--color-accent-red)]/20 p-4">
-              <p className="text-sm text-[var(--color-accent-red)] font-mono">{dump.error}</p>
+            <div className="rounded-[var(--radius-control)] border border-[var(--color-critical)]/25 bg-[var(--color-critical)]/10 p-4">
+              <p className="font-mono text-sm text-[var(--color-critical)]">{dump.error}</p>
             </div>
           ) : (
-            <pre className="text-xs font-mono text-[var(--color-text-secondary)] whitespace-pre leading-relaxed">
+            <pre className="font-mono text-xs leading-relaxed whitespace-pre text-[var(--color-ink-muted)]">
               {dump.output}
             </pre>
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
+  const canManage = useAuthStore((s) => s.hasRole("operator"));
+  const { showToast } = useToast();
   const [processes, setProcesses] = useState<Process[]>([]);
   const [dumps, setDumps] = useState<DumpSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,12 +127,10 @@ export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
   const [filterJava, setFilterJava] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const headers = { Authorization: pb.authStore.token ?? "" };
-
   // ── Fetch processes ──
   const fetchProcesses = useCallback(async () => {
     try {
-      const res = await fetch(`/api/custom/agents/${agentId}/processes`, { headers });
+      const res = await apiFetch(`/api/custom/agents/${agentId}/processes`);
       if (!res.ok) return;
       const data = await res.json();
       setProcesses(data.processes ?? []);
@@ -162,7 +142,7 @@ export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
   // ── Fetch dump history ──
   const fetchDumps = useCallback(async () => {
     try {
-      const res = await fetch(`/api/custom/agents/${agentId}/thread-dumps`, { headers });
+      const res = await apiFetch(`/api/custom/agents/${agentId}/thread-dumps`);
       if (!res.ok) return;
       const data = await res.json();
       setDumps(data.dumps ?? []);
@@ -174,7 +154,7 @@ export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
   // ── Initial load ──
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchProcesses(), fetchDumps()]).finally(() => setLoading(false));
+    void Promise.all([fetchProcesses(), fetchDumps()]).finally(() => setLoading(false));
   }, [fetchProcesses, fetchDumps]);
 
   // ── Poll pending dumps ──
@@ -199,21 +179,21 @@ export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
   const requestDump = async (proc: Process) => {
     setRequesting(proc.pid);
     try {
-      const res = await fetch(`/api/custom/agents/${agentId}/thread-dump`, {
+      const res = await apiFetch(`/api/custom/agents/${agentId}/thread-dump`, {
         method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pid: proc.pid, process_name: proc.name }),
       });
       if (!res.ok) {
         const err = await res.json();
-        alert(`Failed: ${err.error ?? "unknown error"}`);
+        showToast(`Thread dump failed: ${err.error ?? "unknown error"}`, "error");
         setRequesting(null);
         return;
       }
       // Start polling for result.
       await fetchDumps();
     } catch (e) {
-      alert(`Error: ${e}`);
+      showToast(`Thread dump failed: ${String(e)}`, "error");
       setRequesting(null);
     }
   };
@@ -222,7 +202,7 @@ export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
   const openDump = async (dump: DumpSummary) => {
     if (dump.status === "pending") return;
     try {
-      const res = await fetch(`/api/custom/thread-dumps/${dump.id}`, { headers });
+      const res = await apiFetch(`/api/custom/thread-dumps/${dump.id}`);
       if (!res.ok) return;
       const detail = await res.json();
       setSelectedDump(detail);
@@ -236,7 +216,10 @@ export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-6 h-6 animate-spin text-[var(--color-text-muted)]" />
+        <Loader2
+          className="h-6 w-6 animate-spin text-[var(--color-ink-faint)]"
+          aria-hidden="true"
+        />
       </div>
     );
   }
@@ -246,137 +229,160 @@ export function ThreadDumpsTab({ agentId }: ThreadDumpsTabProps) {
       {selectedDump && <DumpViewer dump={selectedDump} onClose={() => setSelectedDump(null)} />}
 
       <div className="space-y-6">
-        {/* ── Process list ── */}
-        <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] overflow-hidden">
-          <div className="px-5 py-4 border-b border-[var(--color-border-default)] flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Play className="w-4 h-4 text-[var(--color-text-muted)]" />
-              <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">Running Processes</h3>
-              <span className="text-xs text-[var(--color-text-muted)]">({displayed.length})</span>
-            </div>
-            <label className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)] cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={filterJava}
-                onChange={(e) => setFilterJava(e.target.checked)}
-                className="rounded"
-              />
-              Java only
-            </label>
-          </div>
+        {/* Process list */}
+        <Panel>
+          <PanelHeader
+            icon={<Play className="h-4 w-4" />}
+            title="Running processes"
+            badge={
+              <span className="text-xs font-normal text-[var(--color-ink-faint)]">
+                ({displayed.length})
+              </span>
+            }
+            actions={
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-ink-muted)] select-none">
+                <input
+                  type="checkbox"
+                  checked={filterJava}
+                  onChange={(e) => setFilterJava(e.target.checked)}
+                  className="rounded border-[var(--color-line)] bg-[var(--color-void)] text-[var(--color-signal)] focus:ring-[var(--color-signal)]"
+                />
+                Java only
+              </label>
+            }
+          />
 
           {displayed.length === 0 ? (
-            <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">
-              {filterJava ? "No Java processes found. Uncheck 'Java only' to see all processes." : "No processes available."}
-            </div>
+            <EmptyState
+              icon={FileCode2}
+              title="No processes to show"
+              description={
+                filterJava
+                  ? "No Java processes found. Uncheck “Java only” to see all processes."
+                  : "No processes available."
+              }
+            />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--color-border-default)]">
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">PID</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">Name</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">User</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)] max-w-xs">Command</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-border-muted)]">
-                  {displayed.map((proc, idx) => {
-                    const isRunning = requesting === proc.pid;
-                    return (
-                      <tr
-                        key={`${proc.pid}-${idx}`}
-                        className={`transition-colors ${idx % 2 === 0 ? "bg-transparent" : "bg-[var(--color-bg-elevated)]/30"} hover:bg-[var(--color-bg-elevated)]`}
-                      >
-                        <td className="px-5 py-3 font-mono text-xs text-[var(--color-text-muted)] tabular-nums">{proc.pid}</td>
-                        <td className="px-5 py-3 font-medium text-[var(--color-text-primary)]">{proc.name}</td>
-                        <td className="px-5 py-3 text-[var(--color-text-secondary)] text-xs">{proc.user}</td>
-                        <td className="px-5 py-3 text-[var(--color-text-muted)] font-mono text-xs max-w-xs">
-                          <span className="truncate block" title={proc.cmdline}>{proc.cmdline || "—"}</span>
-                        </td>
-                        <td className="px-5 py-3 text-right">
-                          <button
-                            onClick={() => requestDump(proc)}
-                            disabled={isRunning || requesting !== null}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-accent-cyan)]/10 text-[var(--color-accent-cyan)] border border-[var(--color-accent-cyan)]/20 hover:bg-[var(--color-accent-cyan)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          >
-                            {isRunning ? (
-                              <><Loader2 className="w-3 h-3 animate-spin" /> Dumping...</>
-                            ) : (
-                              <><FileCode2 className="w-3 h-3" /> Thread Dump</>
-                            )}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <Table>
+              <thead>
+                <tr className="border-b border-[var(--color-line)]">
+                  <Th>PID</Th>
+                  <Th>Name</Th>
+                  <Th>User</Th>
+                  <Th>Command</Th>
+                  <Th align="right">Action</Th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-line-soft)]">
+                {displayed.map((proc, idx) => {
+                  const isRunning = requesting === proc.pid;
+                  return (
+                    <tr key={`${proc.pid}-${idx}`} className={rowClass(idx)}>
+                      <Td className="font-mono text-[var(--color-ink-faint)] tabular-nums">
+                        {proc.pid}
+                      </Td>
+                      <Td className="font-medium">{proc.name}</Td>
+                      <Td className="text-[var(--color-ink-muted)]">{proc.user}</Td>
+                      <Td className="max-w-xs font-mono text-xs text-[var(--color-ink-faint)]">
+                        <span className="block truncate" title={proc.cmdline}>
+                          {proc.cmdline || "—"}
+                        </span>
+                      </Td>
+                      <Td align="right">
+                        <Button
+                          size="sm"
+                          variant="accent"
+                          onClick={() => requestDump(proc)}
+                          disabled={!canManage || isRunning || requesting !== null}
+                          title={
+                            canManage
+                              ? undefined
+                              : "You need the operator role to request a thread dump"
+                          }
+                        >
+                          {isRunning ? (
+                            <>
+                              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />{" "}
+                              Dumping…
+                            </>
+                          ) : (
+                            <>
+                              <FileCode2 className="h-3 w-3" aria-hidden="true" /> Thread dump
+                            </>
+                          )}
+                        </Button>
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
           )}
-        </div>
+        </Panel>
 
-        {/* ── Dump history ── */}
-        <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] overflow-hidden">
-          <div className="px-5 py-4 border-b border-[var(--color-border-default)] flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-[var(--color-text-muted)]" />
-              <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">Dump History</h3>
-              <span className="text-xs text-[var(--color-text-muted)]">({dumps.length})</span>
-            </div>
-            <button
-              onClick={fetchDumps}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-[var(--color-text-secondary)] border border-[var(--color-border-default)] hover:bg-[var(--color-bg-elevated)] transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Refresh
-            </button>
-          </div>
+        {/* Dump history */}
+        <Panel>
+          <PanelHeader
+            icon={<Clock className="h-4 w-4" />}
+            title="Dump history"
+            badge={
+              <span className="text-xs font-normal text-[var(--color-ink-faint)]">
+                ({dumps.length})
+              </span>
+            }
+            actions={
+              <Button size="sm" onClick={fetchDumps}>
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                Refresh
+              </Button>
+            }
+          />
 
           {dumps.length === 0 ? (
-            <div className="p-10 text-center">
-              <FileCode2 className="w-10 h-10 text-[var(--color-text-muted)] mx-auto mb-3" />
-              <p className="text-sm text-[var(--color-text-secondary)]">No thread dumps yet. Click "Thread Dump" on any process to capture one.</p>
-            </div>
+            <EmptyState
+              icon={FileCode2}
+              title="No thread dumps yet"
+              description="Select a process above and choose Thread dump to capture one."
+            />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--color-border-default)]">
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">Status</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">PID</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">Process</th>
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">Taken At</th>
-                    <th className="text-right px-5 py-3 text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider bg-[var(--color-bg-surface)]">Action</th>
+            <Table>
+              <thead>
+                <tr className="border-b border-[var(--color-line)]">
+                  <Th>Status</Th>
+                  <Th>PID</Th>
+                  <Th>Process</Th>
+                  <Th>Taken at</Th>
+                  <Th align="right">Action</Th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-line-soft)]">
+                {dumps.map((dump, idx) => (
+                  <tr key={dump.id} className={rowClass(idx)}>
+                    <Td>
+                      <StatusIndicator status={dumpStatus(dump.status)} label={dump.status} />
+                    </Td>
+                    <Td className="font-mono text-[var(--color-ink-faint)] tabular-nums">
+                      {dump.pid}
+                    </Td>
+                    <Td>{dump.process_name || "—"}</Td>
+                    <Td className="text-xs text-[var(--color-ink-faint)]">
+                      {formatDate(dump.taken_at)}
+                    </Td>
+                    <Td align="right">
+                      <Button
+                        size="sm"
+                        onClick={() => openDump(dump)}
+                        disabled={dump.status === "pending"}
+                      >
+                        View
+                      </Button>
+                    </Td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-border-muted)]">
-                  {dumps.map((dump, idx) => (
-                    <tr
-                      key={dump.id}
-                      className={`transition-colors ${idx % 2 === 0 ? "bg-transparent" : "bg-[var(--color-bg-elevated)]/30"} hover:bg-[var(--color-bg-elevated)]`}
-                    >
-                      <td className="px-5 py-3"><StatusBadge status={dump.status} /></td>
-                      <td className="px-5 py-3 font-mono text-xs text-[var(--color-text-muted)] tabular-nums">{dump.pid}</td>
-                      <td className="px-5 py-3 text-[var(--color-text-primary)]">{dump.process_name || "—"}</td>
-                      <td className="px-5 py-3 text-xs text-[var(--color-text-muted)]">{formatDate(dump.taken_at)}</td>
-                      <td className="px-5 py-3 text-right">
-                        <button
-                          onClick={() => openDump(dump)}
-                          disabled={dump.status === "pending"}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--color-text-secondary)] border border-[var(--color-border-default)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        >
-                          View
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </Table>
           )}
-        </div>
+        </Panel>
       </div>
     </>
   );

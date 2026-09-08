@@ -1,52 +1,68 @@
-import { useState, useEffect, useCallback } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { Plus, Pencil, Trash2, Bell } from "lucide-react";
 import type { AlertRule } from "@/types";
 import pb from "@/lib/pocketbase";
+import { formatDuration } from "@/lib/time";
+import { ruleSummary, ruleTargetingSummary, ruleEscalationSummary } from "@/lib/alertRules";
 import { AlertRuleForm } from "@/components/alerts/AlertRuleForm";
-
-const conditionLabels: Record<string, string> = {
-  gt: ">",
-  lt: "<",
-  eq: "=",
-};
+import { useAuthStore } from "@/stores/authStore";
+import { useAgentStore } from "@/stores/agentStore";
+import { useChecksStore } from "@/stores/checksStore";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Panel, PanelHeader } from "@/components/ui/Panel";
+import { Table, Th, Td } from "@/components/ui/Table";
+import { rowClass } from "@/components/ui/rowClass";
+import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import { Toggle } from "@/components/ui/Toggle";
+import { Button, IconButton } from "@/components/ui/Button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { usePageTitle } from "@/hooks/usePageTitle";
 
 export function Alerts() {
+  usePageTitle("Alert rules");
+
+  const canManage = useAuthStore((s) => s.hasRole("operator"));
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const fetchRules = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const records = await pb
-        .collection("alert_rules")
-        .getFullList<AlertRule>({
-          sort: "-created",
-        });
+      const records = await pb.collection("alert_rules").getFullList<AlertRule>({
+        sort: "-created",
+      });
       setRules(records);
-    } catch {
-      // Handle silently.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load alert rules");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchRules();
+    void fetchRules();
   }, [fetchRules]);
+
+  // Hostnames/check names for the targeting-summary column — read from the
+  // shared stores AppShell already fetches and subscribes once per session
+  // (see DESIGN.md §10) rather than issuing a second full getFullList of
+  // either collection just for this page's lookup maps.
+  const agents = useAgentStore((s) => s.agents);
+  const checks = useChecksStore((s) => s.checks);
+  const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
+  const checksById = useMemo(() => new Map(checks.map((c) => [c.id, c])), [checks]);
 
   const handleToggleEnabled = async (rule: AlertRule) => {
     try {
-      await pb
-        .collection("alert_rules")
-        .update(rule.id, { enabled: !rule.enabled });
-      setRules((prev) =>
-        prev.map((r) =>
-          r.id === rule.id ? { ...r, enabled: !r.enabled } : r,
-        ),
-      );
+      await pb.collection("alert_rules").update(rule.id, { enabled: !rule.enabled });
+      setRules((prev) => prev.map((r) => (r.id === rule.id ? { ...r, enabled: !r.enabled } : r)));
     } catch {
       // Handle silently.
     }
@@ -70,7 +86,7 @@ export function Alerts() {
   const handleFormSave = () => {
     setShowForm(false);
     setEditingRule(null);
-    fetchRules();
+    void fetchRules();
   };
 
   const handleFormClose = () => {
@@ -80,163 +96,139 @@ export function Alerts() {
 
   return (
     <div>
-      <h2 className="text-2xl font-semibold mb-6">Alert Rules</h2>
+      <PageHeader
+        title="Alert rules"
+        actions={
+          canManage && (
+            <Button
+              variant="primary"
+              onClick={() => {
+                setEditingRule(null);
+                setShowForm(true);
+              }}
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Add rule
+            </Button>
+          )
+        }
+      />
 
-      {/* Alert rules list */}
-      <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] overflow-hidden">
-        <div className="px-6 py-4 border-b border-[var(--color-border-default)] flex items-center justify-between">
-          <h3 className="text-lg font-medium">Rules</h3>
-          <button
-            onClick={() => {
-              setEditingRule(null);
-              setShowForm(true);
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-[var(--color-accent-cyan)] text-[var(--color-bg-primary)] text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
-          >
-            <Plus className="w-4 h-4" />
-            Add Rule
-          </button>
-        </div>
+      <Panel>
+        <PanelHeader title="Rules" />
 
         {loading ? (
-          <div className="p-6 text-center">
-            <p className="text-sm text-[var(--color-text-muted)]">
-              Loading rules...
-            </p>
+          <div className="p-5">
+            <Skeleton className="h-40 w-full" />
           </div>
+        ) : error ? (
+          <ErrorState
+            title="Couldn't load alert rules"
+            description={error}
+            action={
+              <Button variant="primary" size="sm" onClick={() => void fetchRules()}>
+                Try again
+              </Button>
+            }
+          />
         ) : rules.length === 0 ? (
-          <div className="p-6">
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              No alert rules configured yet. Create your first rule to get
-              notified when something goes wrong.
-            </p>
-          </div>
+          <EmptyState
+            icon={Bell}
+            title="No alert rules configured yet"
+            description="Create your first rule to get notified when something goes wrong."
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border-default)] text-[var(--color-text-muted)]">
-                  <th className="px-6 py-3 text-left font-medium">Name</th>
-                  <th className="px-6 py-3 text-left font-medium">Metric</th>
-                  <th className="px-6 py-3 text-left font-medium">
-                    Condition
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium">
-                    Duration
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium">
-                    Severity
-                  </th>
-                  <th className="px-6 py-3 text-left font-medium">Enabled</th>
-                  <th className="px-6 py-3 text-right font-medium">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map((rule) => (
-                  <tr
-                    key={rule.id}
-                    className="border-b border-[var(--color-border-muted)] hover:bg-[var(--color-bg-elevated)]/50"
-                  >
-                    <td className="px-6 py-3 font-medium text-[var(--color-text-primary)]">
-                      {rule.name}
-                    </td>
-                    <td className="px-6 py-3">
-                      <span className="px-2 py-0.5 rounded bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] text-xs font-mono">
-                        {rule.metric_type}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 text-[var(--color-text-secondary)]">
-                      {conditionLabels[rule.condition] ?? rule.condition}{" "}
-                      {rule.threshold}
-                    </td>
-                    <td className="px-6 py-3 text-[var(--color-text-secondary)]">
-                      {rule.duration}s
-                    </td>
-                    <td className="px-6 py-3">
-                      <span
-                        className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
-                          rule.severity === "critical"
-                            ? "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]"
-                            : "bg-[var(--color-accent-yellow)]/10 text-[var(--color-accent-yellow)]"
-                        }`}
-                      >
-                        {rule.severity}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3">
-                      <button
-                        onClick={() => handleToggleEnabled(rule)}
-                        className="relative inline-flex items-center cursor-pointer"
-                      >
-                        <div
-                          className={`w-9 h-5 rounded-full transition-colors ${
-                            rule.enabled
-                              ? "bg-[var(--color-accent-cyan)]"
-                              : "bg-[var(--color-bg-elevated)]"
-                          }`}
-                        >
-                          <div
-                            className={`absolute top-[2px] w-4 h-4 bg-white rounded-full transition-transform ${
-                              rule.enabled
-                                ? "translate-x-[18px]"
-                                : "translate-x-[2px]"
-                            }`}
-                          />
-                        </div>
-                      </button>
-                    </td>
-                    <td className="px-6 py-3 text-right">
+          <Table>
+            <thead>
+              <tr className="border-b border-[var(--color-line)]">
+                <Th>Name</Th>
+                <Th>Rule</Th>
+                <Th>Duration</Th>
+                <Th>Targeting</Th>
+                <Th>Severity</Th>
+                <Th>Escalation</Th>
+                <Th>Enabled</Th>
+                <Th align="right">Actions</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--color-line-soft)]">
+              {rules.map((rule, idx) => (
+                <tr key={rule.id} className={rowClass(idx)}>
+                  <Td className="font-medium">{rule.name}</Td>
+                  <Td>
+                    <span className="rounded-[var(--radius-chip)] bg-[var(--color-panel-raised)] px-2 py-0.5 font-mono text-xs text-[var(--color-ink-muted)]">
+                      {ruleSummary(rule)}
+                    </span>
+                  </Td>
+                  <Td className="text-[var(--color-ink-muted)]">{formatDuration(rule.duration)}</Td>
+                  <Td className="text-[var(--color-ink-muted)]">
+                    {ruleTargetingSummary(rule, agentsById, checksById)}
+                  </Td>
+                  <Td>
+                    <StatusIndicator
+                      status={rule.severity === "critical" ? "critical" : "warning"}
+                      label={rule.severity}
+                    />
+                  </Td>
+                  <Td className="text-[var(--color-ink-muted)]">{ruleEscalationSummary(rule)}</Td>
+                  <Td>
+                    <Toggle
+                      checked={rule.enabled}
+                      disabled={!canManage}
+                      onChange={() => handleToggleEnabled(rule)}
+                      label={`${rule.enabled ? "Disable" : "Enable"} rule ${rule.name}`}
+                    />
+                  </Td>
+                  <Td align="right">
+                    {!canManage ? (
+                      <span className="text-xs text-[var(--color-ink-faint)]">—</span>
+                    ) : (
                       <div className="flex items-center justify-end gap-1">
-                        <button
+                        <IconButton
+                          aria-label={`Edit rule ${rule.name}`}
                           onClick={() => handleEdit(rule)}
-                          className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-accent-cyan)] hover:bg-[var(--color-accent-cyan)]/10"
-                          title="Edit rule"
                         >
-                          <Pencil className="w-4 h-4" />
-                        </button>
+                          <Pencil className="h-4 w-4" />
+                        </IconButton>
                         {deleteConfirm === rule.id ? (
                           <div className="flex items-center gap-1">
-                            <button
+                            <Button
+                              size="sm"
+                              variant="danger"
                               onClick={() => handleDelete(rule.id)}
-                              className="px-2 py-1 text-xs rounded bg-[var(--color-accent-red)] text-white"
                             >
                               Confirm
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
                               onClick={() => setDeleteConfirm(null)}
-                              className="px-2 py-1 text-xs rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)]"
                             >
                               Cancel
-                            </button>
+                            </Button>
                           </div>
                         ) : (
-                          <button
+                          <IconButton
+                            aria-label={`Delete rule ${rule.name}`}
                             onClick={() => setDeleteConfirm(rule.id)}
-                            className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-accent-red)] hover:bg-[var(--color-accent-red)]/10"
-                            title="Delete rule"
+                            className="hover:!bg-[var(--color-critical)]/10 hover:!text-[var(--color-critical)]"
                           >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                            <Trash2 className="h-4 w-4" />
+                          </IconButton>
                         )}
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    )}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
         )}
-      </div>
+      </Panel>
 
       {/* Form Modal */}
       {showForm && (
-        <AlertRuleForm
-          rule={editingRule}
-          onSave={handleFormSave}
-          onClose={handleFormClose}
-        />
+        <AlertRuleForm rule={editingRule} onSave={handleFormSave} onClose={handleFormClose} />
       )}
     </div>
   );

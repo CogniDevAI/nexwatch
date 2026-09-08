@@ -1,13 +1,11 @@
 import { useEffect, useState, useRef, useCallback } from "react";
-import {
-  Shield,
-  Check,
-  X,
-  AlertTriangle,
-  SkipForward,
-} from "lucide-react";
-import pb from "@/lib/pocketbase";
+import { Shield, Check, X, AlertTriangle, SkipForward } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 import type { HardeningData, HardeningCheck } from "@/types";
+import { MetricTile } from "@/components/ui/MetricTile";
+import { SeverityBadge } from "@/components/ui/SeverityBadge";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 interface HardeningTabProps {
   agentId: string;
@@ -16,51 +14,34 @@ interface HardeningTabProps {
 const REFRESH_INTERVAL = 60_000;
 
 function scoreColor(score: number): string {
-  if (score >= 80) return "var(--color-accent-green)";
-  if (score >= 50) return "var(--color-accent-yellow)";
-  return "var(--color-accent-red)";
-}
-
-function severityBadge(severity: HardeningCheck["severity"]) {
-  const map: Record<string, string> = {
-    critical: "bg-[var(--color-accent-red)]/10 text-[var(--color-accent-red)]",
-    high: "bg-[#f97316]/10 text-[#f97316]",
-    medium: "bg-[var(--color-accent-yellow)]/10 text-[var(--color-accent-yellow)]",
-    low: "bg-[var(--color-accent-cyan)]/10 text-[var(--color-accent-cyan)]",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium uppercase ${map[severity] ?? map.low}`}
-    >
-      {severity}
-    </span>
-  );
+  if (score >= 80) return "var(--color-ok)";
+  if (score >= 50) return "var(--color-warn)";
+  return "var(--color-critical)";
 }
 
 function CheckIcon({ status }: { status: HardeningCheck["status"] }) {
   switch (status) {
     case "pass":
-      return <Check className="w-4 h-4 text-[var(--color-accent-green)]" />;
+      return <Check className="h-4 w-4 text-[var(--color-ok)]" aria-hidden="true" />;
     case "fail":
-      return <X className="w-4 h-4 text-[var(--color-accent-red)]" />;
+      return <X className="h-4 w-4 text-[var(--color-critical)]" aria-hidden="true" />;
     case "warn":
-      return <AlertTriangle className="w-4 h-4 text-[var(--color-accent-yellow)]" />;
+      return <AlertTriangle className="h-4 w-4 text-[var(--color-warn)]" aria-hidden="true" />;
     case "skip":
-      return <SkipForward className="w-4 h-4 text-[var(--color-text-muted)]" />;
+      return <SkipForward className="h-4 w-4 text-[var(--color-ink-faint)]" aria-hidden="true" />;
   }
 }
 
 function borderColor(status: HardeningCheck["status"]): string {
   switch (status) {
     case "pass":
-      return "border-l-[var(--color-accent-green)]";
+      return "border-l-[var(--color-ok)]";
     case "fail":
-      return "border-l-[var(--color-accent-red)]";
+      return "border-l-[var(--color-critical)]";
     case "warn":
-      return "border-l-[var(--color-accent-yellow)]";
+      return "border-l-[var(--color-warn)]";
     case "skip":
-      return "border-l-[var(--color-text-muted)]";
+      return "border-l-[var(--color-ink-faint)]";
   }
 }
 
@@ -70,30 +51,31 @@ export function HardeningTab({ agentId }: HardeningTabProps) {
   const [error, setError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchData = useCallback(async (showLoading = false) => {
-    if (showLoading) setLoading(true);
-    try {
-      const res = await fetch(`/api/custom/agents/${agentId}/hardening`, {
-        headers: { Authorization: pb.authStore.token },
-      });
-      if (!res.ok) {
+  const fetchData = useCallback(
+    async (showLoading = false) => {
+      if (showLoading) setLoading(true);
+      try {
+        const res = await apiFetch(`/api/custom/agents/${agentId}/hardening`);
+        if (!res.ok) {
+          setData(null);
+          setError(true);
+          return;
+        }
+        const json = (await res.json()) as HardeningData;
+        setData(json);
+        setError(false);
+      } catch {
         setData(null);
         setError(true);
-        return;
+      } finally {
+        setLoading(false);
       }
-      const json = (await res.json()) as HardeningData;
-      setData(json);
-      setError(false);
-    } catch {
-      setData(null);
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [agentId]);
+    },
+    [agentId],
+  );
 
   useEffect(() => {
-    fetchData(true);
+    void fetchData(true);
 
     intervalRef.current = setInterval(() => fetchData(false), REFRESH_INTERVAL);
     return () => {
@@ -103,26 +85,21 @@ export function HardeningTab({ agentId }: HardeningTabProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <Shield className="w-5 h-5 text-[var(--color-accent-cyan)] animate-pulse" />
-        <span className="ml-3 text-sm text-[var(--color-text-secondary)]">
-          Loading hardening data...
-        </span>
+      <div className="space-y-4">
+        <Skeleton className="h-36 w-full" />
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-10 text-center">
-        <Shield className="w-12 h-12 text-[var(--color-text-muted)] mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-[var(--color-text-primary)] mb-2">
-          No data yet
-        </h3>
-        <p className="text-sm text-[var(--color-text-secondary)] max-w-md mx-auto">
-          No hardening data has been reported by this agent. Make sure the
-          hardening collector is enabled.
-        </p>
+      <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]">
+        <EmptyState
+          icon={Shield}
+          title="No data yet"
+          description="No hardening data has been reported by this agent. Make sure the hardening collector is enabled."
+        />
       </div>
     );
   }
@@ -134,21 +111,24 @@ export function HardeningTab({ agentId }: HardeningTabProps) {
   return (
     <div>
       {/* Score + Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6 mb-6">
+      <div className="mb-6 grid grid-cols-1 gap-6 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)] p-6 md:grid-cols-[auto_1fr]">
         {/* Circular score */}
         <div className="flex items-center justify-center">
-          <div className="relative w-36 h-36">
-            <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
-              {/* Background circle */}
+          <div className="relative h-36 w-36">
+            <svg
+              viewBox="0 0 120 120"
+              className="h-full w-full -rotate-90"
+              role="img"
+              aria-label={`Hardening score: ${data.score} out of 100`}
+            >
               <circle
                 cx="60"
                 cy="60"
                 r="54"
                 fill="none"
-                stroke="var(--color-border-default)"
+                stroke="var(--color-line)"
                 strokeWidth="8"
               />
-              {/* Progress circle */}
               <circle
                 cx="60"
                 cy="60"
@@ -163,45 +143,20 @@ export function HardeningTab({ agentId }: HardeningTabProps) {
               />
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span
-                className="text-3xl font-bold tabular-nums"
-                style={{ color }}
-              >
+              <span className="font-mono text-3xl font-semibold tabular-nums" style={{ color }}>
                 {data.score}
               </span>
-              <span className="text-xs text-[var(--color-text-muted)]">
-                / 100
-              </span>
+              <span className="text-xs text-[var(--color-ink-faint)]">/ 100</span>
             </div>
           </div>
         </div>
 
-        {/* Summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4 text-center">
-            <div className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">
-              {data.total}
-            </div>
-            <div className="text-xs text-[var(--color-text-muted)] mt-1">Total Checks</div>
-          </div>
-          <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4 text-center">
-            <div className="text-2xl font-bold text-[var(--color-accent-green)] tabular-nums">
-              {data.passed}
-            </div>
-            <div className="text-xs text-[var(--color-text-muted)] mt-1">Passed</div>
-          </div>
-          <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4 text-center">
-            <div className="text-2xl font-bold text-[var(--color-accent-red)] tabular-nums">
-              {data.failed}
-            </div>
-            <div className="text-xs text-[var(--color-text-muted)] mt-1">Failed</div>
-          </div>
-          <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-4 text-center">
-            <div className="text-2xl font-bold text-[var(--color-accent-yellow)] tabular-nums">
-              {data.warnings}
-            </div>
-            <div className="text-xs text-[var(--color-text-muted)] mt-1">Warnings</div>
-          </div>
+        {/* Summary tiles */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <MetricTile label="Total checks" value={data.total} />
+          <MetricTile label="Passed" value={data.passed} tone="ok" />
+          <MetricTile label="Failed" value={data.failed} tone="critical" />
+          <MetricTile label="Warnings" value={data.warnings} tone="warning" />
         </div>
       </div>
 
@@ -210,22 +165,18 @@ export function HardeningTab({ agentId }: HardeningTabProps) {
         {data.checks.map((check, idx) => (
           <div
             key={`${check.name}-${idx}`}
-            className={`rounded-lg border border-[var(--color-border-default)] border-l-4 ${borderColor(check.status)} bg-[var(--color-bg-surface)] p-4 transition-colors hover:bg-[var(--color-bg-elevated)]`}
+            className={`rounded-[var(--radius-panel)] border border-l-4 border-[var(--color-line)] ${borderColor(check.status)} bg-[var(--color-panel)] p-4 transition-colors hover:bg-[var(--color-panel-raised)]`}
           >
             <div className="flex items-start gap-3">
               <div className="mt-0.5">
                 <CheckIcon status={check.status} />
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-[var(--color-text-primary)]">
-                    {check.name}
-                  </span>
-                  {severityBadge(check.severity)}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-[var(--color-ink)]">{check.name}</span>
+                  <SeverityBadge severity={check.severity} />
                 </div>
-                <p className="text-sm text-[var(--color-text-secondary)] mt-1">
-                  {check.description}
-                </p>
+                <p className="mt-1 text-sm text-[var(--color-ink-muted)]">{check.description}</p>
               </div>
             </div>
           </div>
