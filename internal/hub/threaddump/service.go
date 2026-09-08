@@ -2,7 +2,7 @@ package threaddump
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -21,8 +21,10 @@ func NewService(app core.App) *Service {
 }
 
 // RequestDump sends a thread_dump command to the agent and creates a pending record.
-// Returns the request_id so the caller can poll for the result.
-func (s *Service) RequestDump(agentID string, pid int, processName string, sender func(agentID string, payload *protocol.CommandPayload) error) (string, error) {
+// requestedBy identifies the authenticated caller (record id, optionally with
+// email) and is stored alongside the dump for auditing. Returns the
+// request_id so the caller can poll for the result.
+func (s *Service) RequestDump(agentID string, pid int, processName string, requestedBy string, sender func(agentID string, payload *protocol.CommandPayload) error) (string, error) {
 	requestID := fmt.Sprintf("td-%d-%d", time.Now().UnixMilli(), pid)
 
 	// Create a pending record in the DB.
@@ -36,6 +38,7 @@ func (s *Service) RequestDump(agentID string, pid int, processName string, sende
 	record.Set("pid", pid)
 	record.Set("process_name", processName)
 	record.Set("request_id", requestID)
+	record.Set("requested_by", requestedBy)
 	record.Set("status", "pending")
 	record.Set("taken_at", time.Now().UTC().Format("2006-01-02 15:04:05.000Z"))
 
@@ -77,7 +80,7 @@ func (s *Service) HandleResponse(app core.App, payload *protocol.CommandResponse
 		map[string]any{"req": payload.RequestID},
 	)
 	if err != nil || len(records) == 0 {
-		log.Printf("[threaddump] response for unknown request_id=%s", payload.RequestID)
+		slog.Warn("thread dump response for unknown request", "request_id", payload.RequestID)
 		return
 	}
 
@@ -91,6 +94,6 @@ func (s *Service) HandleResponse(app core.App, payload *protocol.CommandResponse
 	}
 
 	if err := app.Save(record); err != nil {
-		log.Printf("[threaddump] failed to save response for req=%s: %v", payload.RequestID, err)
+		slog.Error("failed to save thread dump response", "request_id", payload.RequestID, "error", err)
 	}
 }

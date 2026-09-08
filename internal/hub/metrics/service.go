@@ -3,7 +3,7 @@ package metrics
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/pocketbase/pocketbase/core"
@@ -36,14 +36,14 @@ func (s *Service) IngestMetrics(app core.App, agentID string, payload *protocol.
 		// Marshal the data map to JSON for storage.
 		dataJSON, err := json.Marshal(m.Data)
 		if err != nil {
-			log.Printf("[metrics] marshal data error for agent %s: %v", agentID, err)
+			slog.Error("marshal metric data failed", "agent_id", agentID, "metric_type", m.Type, "error", err)
 			continue
 		}
 
 		// Insert into metrics collection.
 		collection, err := app.FindCollectionByNameOrId("metrics")
 		if err != nil {
-			log.Printf("[metrics] find collection error: %v", err)
+			slog.Error("metrics collection not found", "error", err)
 			return
 		}
 
@@ -55,13 +55,29 @@ func (s *Service) IngestMetrics(app core.App, agentID string, payload *protocol.
 		record.Set("resolution", "raw")
 
 		if err := app.Save(record); err != nil {
-			log.Printf("[metrics] save error for agent %s type %s: %v", agentID, m.Type, err)
+			slog.Error("failed to save metric", "agent_id", agentID, "metric_type", m.Type, "error", err)
 			continue
 		}
 
-		// If docker type, also update docker_containers collection.
+		// If docker type, also update docker_containers collection — one
+		// row per container reported in this cycle. m.Data is the whole
+		// docker collector payload ({available, container_count,
+		// containers: [...]}, see internal/agent/collector/docker.go), not
+		// a single container's fields, so each element of "containers"
+		// needs its own upsert call. (Passing m.Data directly here was a
+		// pre-existing bug: upsertDockerContainer looked for a
+		// "container_id" key that only ever existed one level deeper,
+		// inside each "containers" entry, so docker_containers was never
+		// actually populated in production — found via a live agent+hub
+		// end-to-end run.)
 		if m.Type == "docker" {
-			s.upsertDockerContainer(app, agentID, m.Data)
+			if containers, ok := m.Data["containers"].([]any); ok {
+				for _, c := range containers {
+					if containerData, ok := c.(map[string]any); ok {
+						s.upsertDockerContainer(app, agentID, containerData)
+					}
+				}
+			}
 		}
 	}
 }
@@ -87,7 +103,7 @@ func (s *Service) upsertDockerContainer(app core.App, agentID string, data map[s
 		// Create new record.
 		collection, err := app.FindCollectionByNameOrId("docker_containers")
 		if err != nil {
-			log.Printf("[metrics] docker collection not found: %v", err)
+			slog.Error("docker_containers collection not found", "error", err)
 			return
 		}
 		record = core.NewRecord(collection)
@@ -120,11 +136,27 @@ func (s *Service) upsertDockerContainer(app core.App, agentID string, data map[s
 	if netTx, ok := toFloat64(data["network_tx"]); ok {
 		record.Set("network_tx", netTx)
 	}
+	// Image update-detection fields — only present when the agent's docker
+	// collector ran an update check for this container's image (see
+	// internal/agent/collector/docker_update.go). Absent for a locally-built
+	// image, a disabled "docker_update_checks" config flag, or a container
+	// whose most recent report predates this feature; the collector simply
+	// omits these keys rather than sending them as zero values, so a
+	// missing key here must not overwrite a previously known digest.
+	if imageDigest, ok := data["image_digest"].(string); ok {
+		record.Set("image_digest", imageDigest)
+	}
+	if remoteDigest, ok := data["remote_digest"].(string); ok {
+		record.Set("remote_digest", remoteDigest)
+	}
+	if updateAvailable, ok := data["update_available"].(bool); ok {
+		record.Set("update_available", updateAvailable)
+	}
 
 	record.Set("updated_at", time.Now().UTC().Format("2006-01-02 15:04:05.000Z"))
 
 	if err := app.Save(record); err != nil {
-		log.Printf("[metrics] docker container save error: %v", err)
+		slog.Error("failed to save docker container", "agent_id", agentID, "container_id", containerID, "error", err)
 	}
 }
 
