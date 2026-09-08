@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+  # Required by @vite-pwa/assets-generator (F11 — PWA icon generation from
+  # public/favicon.svg) to build its native image-processing binary.
+  sharp: true

@@ -29,6 +29,11 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
+          # Windows: agent only (the hub has no Windows support/target —
+          # skip_hub guards the hub build/package steps below).
+          - goos: windows
+            goarch: amd64
+            skip_hub: true
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +61,7 @@ jobs:
         run: go mod download
 
       - name: Build hub
+        if: matrix.skip_hub != true
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -72,18 +78,33 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           VERSION=${GITHUB_REF_NAME#v}
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           go build -ldflags="-s -w -X main.version=${VERSION}" \
-            -o nexwatch-agent ./cmd/agent
+            -o "nexwatch-agent${EXT}" ./cmd/agent
 
       - name: Package hub
+        if: matrix.skip_hub != true
         run: |
           tar -czf nexwatch-hub_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz nexwatch-hub
           sha256sum nexwatch-hub_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz > nexwatch-hub_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz.sha256
 
-      - name: Package agent
+      # Windows packages as a .zip (the platform's native archive format,
+      # and what scripts/install-agent.ps1 and Get-FileHash work with
+      # natively — see internal/agent/update's extractArchive, which
+      # dispatches on this same extension); every other target keeps the
+      # existing .tar.gz.
+      - name: Package agent (tar.gz)
+        if: matrix.goos != 'windows'
         run: |
           tar -czf nexwatch-agent_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz nexwatch-agent
           sha256sum nexwatch-agent_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz > nexwatch-agent_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz.sha256
+
+      - name: Package agent (zip)
+        if: matrix.goos == 'windows'
+        run: |
+          zip -q nexwatch-agent_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.zip nexwatch-agent.exe
+          sha256sum nexwatch-agent_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.zip > nexwatch-agent_${GITHUB_REF_NAME#v}_${{ matrix.goos }}_${{ matrix.goarch }}.zip.sha256
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -94,6 +115,8 @@ jobs:
             nexwatch-hub_*.tar.gz.sha256
             nexwatch-agent_*.tar.gz
             nexwatch-agent_*.tar.gz.sha256
+            nexwatch-agent_*.zip
+            nexwatch-agent_*.zip.sha256
 
   release:
     name: Create Release
@@ -108,6 +131,44 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate aggregate checksums
+        working-directory: dist
+        run: |
+          sha256sum nexwatch-*.tar.gz nexwatch-*.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Check for release signing key
+        id: signing
+        env:
+          GPG_KEY_PRESENT: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        run: echo "enabled=${GPG_KEY_PRESENT}" >> "$GITHUB_OUTPUT"
+
+      - name: Import GPG signing key
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent || true
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
+
+      - name: Sign release checksums
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: dist
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+          gpg --verify SHA256SUMS.asc SHA256SUMS
+
+      - name: Warn about unsigned release
+        if: steps.signing.outputs.enabled != 'true'
+        run: |
+          echo "::warning::GPG_PRIVATE_KEY secret is not set — this release's SHA256SUMS will NOT be signed. See docs/RELEASE_SIGNING.md to enable release signing."
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -117,12 +178,20 @@ jobs:
             dist/nexwatch-hub_*.tar.gz.sha256
             dist/nexwatch-agent_*.tar.gz
             dist/nexwatch-agent_*.tar.gz.sha256
+            dist/nexwatch-agent_*.zip
+            dist/nexwatch-agent_*.zip.sha256
+            dist/SHA256SUMS
+            dist/SHA256SUMS.asc
 
   docker:
     name: Docker Images
     runs-on: ubuntu-latest
     needs: release
     continue-on-error: true
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # required for cosign keyless (OIDC) signing
     steps:
       - uses: actions/checkout@v4
 
@@ -139,11 +208,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Hub image
+        id: build-hub
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -157,6 +230,7 @@ jobs:
             VERSION=${{ steps.version.outputs.version }}
 
       - name: Build and push Agent image
+        id: build-agent
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -168,3 +242,15 @@ jobs:
             ${{ env.AGENT_IMAGE }}:latest
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
+
+      # Keyless signing via GitHub OIDC — no key material or secrets involved.
+      # Each image is signed by its immutable digest, not by a mutable tag.
+      - name: Sign Hub image (keyless/OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: cosign sign --yes "${{ env.HUB_IMAGE }}@${{ steps.build-hub.outputs.digest }}"
+
+      - name: Sign Agent image (keyless/OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: cosign sign --yes "${{ env.AGENT_IMAGE }}@${{ steps.build-agent.outputs.digest }}"

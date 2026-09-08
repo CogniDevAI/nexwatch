@@ -1,0 +1,64 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+    - gosec
+    - revive
+    - gocritic
+
+  settings:
+    revive:
+      # Light configuration: keep the default rule set rather than
+      # enabling revive's stricter opinionated rules, since this pass is
+      # meant to catch obvious issues, not to reshape existing style.
+      severity: warning
+      confidence: 0.8
+
+    gosec:
+      excludes:
+        # G204 (subprocess launched with variable): the agent's hardening,
+        # vulnerabilities, docker, and oracle collectors intentionally
+        # exec commands like jstack/sqlplus/find/iptables with
+        # operator-controlled arguments (PIDs, configured paths). This is
+        # the collector's job, not an injection vector from untrusted
+        # network input.
+        - G204
+        # G304 (file path provided as taint input): the agent's collectors
+        # intentionally read fixed, well-known system paths
+        # (/etc/passwd, /etc/shadow, sshd_config) built from constants or
+        # already-validated ORACLE_HOME config, not from request input.
+        - G304
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test files commonly build fixture structs with zero-value fields
+      # and use fmt.Sprintf-style assertions that gosec/gocritic flag
+      # more aggressively than is useful for test code.
+      - path: _test\.go
+        linters:
+          - gosec
+          - gocritic
+      # G706 (log injection via taint analysis): agentID here is a
+      # PocketBase record ID resolved from a token-authenticated
+      # connection (internal/hub/ws/handler.go), not raw external input,
+      # and the token itself is truncated to 8 hex chars before logging.
+      # gosec's taint tracker flags it regardless of format verb.
+      - path: internal/hub/ws/handler\.go
+        linters:
+          - gosec
+        text: "G706"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

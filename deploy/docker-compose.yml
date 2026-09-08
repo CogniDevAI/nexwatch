@@ -5,6 +5,10 @@ services:
       dockerfile: deploy/Dockerfile.hub
     ports:
       - "8090:8090"
+    environment:
+      # Ensures the sample agent's "changeme" token below authenticates
+      # against a hashed agents.token_hash record on first boot.
+      - NEXWATCH_BOOTSTRAP_AGENT_TOKEN=changeme
     volumes:
       - nexwatch-data:/app/pb_data
     restart: unless-stopped

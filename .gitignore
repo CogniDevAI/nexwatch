@@ -25,6 +25,7 @@ pb_data/
 ui/node_modules/
 ui/dist/
 ui/.vite/
+ui/coverage/
 *.tsbuildinfo
 
 # IDE
@@ -46,3 +47,5 @@ Thumbs.db
 .env.*.local
 /nexwatch-hub
 /nexwatch-agent
+# Local Pi runtime state
+.atl/
