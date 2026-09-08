@@ -13,15 +13,24 @@ import (
 	"github.com/CogniDevAI/nexwatch/internal/hub/notify"
 )
 
+// telegramAPIBaseURL is the production Telegram Bot API base URL.
+const telegramAPIBaseURL = "https://api.telegram.org"
+
 // TelegramNotifier sends alert notifications via the Telegram Bot API.
 type TelegramNotifier struct {
 	client *http.Client
+
+	// baseURL defaults to telegramAPIBaseURL and exists as a seam so tests
+	// can point the notifier at a local httptest server instead of the
+	// real Telegram API.
+	baseURL string
 }
 
 // NewTelegramNotifier creates a new Telegram notifier.
 func NewTelegramNotifier() *TelegramNotifier {
 	return &TelegramNotifier{
-		client: &http.Client{},
+		client:  &http.Client{},
+		baseURL: telegramAPIBaseURL,
 	}
 }
 
@@ -32,7 +41,7 @@ func (n *TelegramNotifier) Type() string {
 
 // Send delivers an alert notification via the Telegram Bot API.
 // Channel config expects: bot_token, chat_id
-func (n *TelegramNotifier) Send(ctx context.Context, alert *core.Record, channel *core.Record) error {
+func (n *TelegramNotifier) Send(ctx context.Context, alert *core.Record, channel *core.Record, alertCtx notify.AlertContext) error {
 	config, err := notify.ParseChannelConfig(channel)
 	if err != nil {
 		return err
@@ -46,7 +55,7 @@ func (n *TelegramNotifier) Send(ctx context.Context, alert *core.Record, channel
 	}
 
 	// Render the message text.
-	text := notify.RenderMessage(alert)
+	text := notify.RenderMessage(alert, alertCtx.Severity)
 
 	// Build Telegram sendMessage payload.
 	payload := map[string]any{
@@ -60,7 +69,7 @@ func (n *TelegramNotifier) Send(ctx context.Context, alert *core.Record, channel
 		return fmt.Errorf("failed to marshal telegram payload: %w", err)
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
+	url := fmt.Sprintf("%s/bot%s/sendMessage", n.baseURL, botToken)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -73,7 +82,7 @@ func (n *TelegramNotifier) Send(ctx context.Context, alert *core.Record, channel
 	if err != nil {
 		return fmt.Errorf("telegram request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 

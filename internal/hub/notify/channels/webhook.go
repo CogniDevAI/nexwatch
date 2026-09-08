@@ -32,7 +32,7 @@ func (n *WebhookNotifier) Type() string {
 
 // Send delivers an alert notification via HTTP POST (or configured method).
 // Channel config expects: url, method (optional, default POST), headers (optional JSON object)
-func (n *WebhookNotifier) Send(ctx context.Context, alert *core.Record, channel *core.Record) error {
+func (n *WebhookNotifier) Send(ctx context.Context, alert *core.Record, channel *core.Record, alertCtx notify.AlertContext) error {
 	config, err := notify.ParseChannelConfig(channel)
 	if err != nil {
 		return err
@@ -48,15 +48,29 @@ func (n *WebhookNotifier) Send(ctx context.Context, alert *core.Record, channel 
 		method = "POST"
 	}
 
-	// Build JSON payload.
+	// Build JSON payload. "context" carries the enrichment details
+	// resolved once by the dispatcher (hostname, tags, rule/check
+	// identity, a dashboard link) so a receiver doesn't have to re-query
+	// NexWatch's own API to show anything beyond the raw alert fields.
 	payload := map[string]any{
-		"source":  "nexwatch",
-		"alert_id": alert.Id,
-		"status":  alert.GetString("status"),
-		"value":   alert.GetFloat("value"),
-		"message": alert.GetString("message"),
-		"fired_at": alert.GetString("fired_at"),
+		"source":      "nexwatch",
+		"alert_id":    alert.Id,
+		"status":      alert.GetString("status"),
+		"value":       alert.GetFloat("value"),
+		"message":     alert.GetString("message"),
+		"fired_at":    alert.GetString("fired_at"),
 		"resolved_at": alert.GetString("resolved_at"),
+		"context": map[string]any{
+			"hostname":        alertCtx.Hostname,
+			"agent_tags":      alertCtx.AgentTags,
+			"rule_name":       alertCtx.RuleName,
+			"rule_target":     alertCtx.RuleTarget,
+			"check_name":      alertCtx.CheckName,
+			"check_target":    alertCtx.CheckTarget,
+			"severity":        alertCtx.Severity,
+			"acknowledged_by": alertCtx.AcknowledgedBy,
+			"dashboard_url":   alertCtx.DashboardURL,
+		},
 	}
 
 	body, err := json.Marshal(payload)
@@ -87,7 +101,7 @@ func (n *WebhookNotifier) Send(ctx context.Context, alert *core.Record, channel 
 	if err != nil {
 		return fmt.Errorf("webhook request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response body for error diagnostics.
 	_, _ = io.ReadAll(resp.Body)
