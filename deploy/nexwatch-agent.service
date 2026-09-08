@@ -7,6 +7,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=nexwatch
+# Lets the nexwatch user read the systemd journal (log_sources: journald)
+# and /var/log (log_sources: file) for the log-shipping feature, without
+# running as root. Both groups exist by default on any systemd-based
+# Linux distribution.
+SupplementaryGroups=systemd-journal adm
 # Uncomment if docker group exists on the host:
 # SupplementaryGroups=docker
 
@@ -16,8 +21,14 @@ EnvironmentFile=-/etc/nexwatch/agent.env
 
 ExecStart=/usr/local/bin/nexwatch-agent
 
-Restart=on-failure
-RestartSec=5
+# Restart=always (not on-failure): a hub-initiated self-update
+# (internal/agent/update) re-execs the new binary in place when possible,
+# but falls back to a clean exit(0) when re-exec itself isn't available —
+# Restart=on-failure does NOT restart systemd units on a clean exit 0, so
+# that fallback path would otherwise leave the agent stopped after a
+# successful update.
+Restart=always
+RestartSec=2
 
 # File descriptor limit (needed for high-cardinality metric collection)
 LimitNOFILE=65536
@@ -32,6 +43,11 @@ PrivateTmp=true
 
 # Allow reading /proc and /sys for metric collectors (diskio, connections, processes)
 ReadOnlyPaths=/proc /sys
+
+# Writable /var/lib/nexwatch under ProtectSystem=strict, for the cve_scan
+# collector's scanner cache (TRIVY_CACHE_DIR/GRYPE_DB_CACHE_DIR — see
+# cve_scan_cache_dir in agent.yaml). systemd creates/owns this directory.
+StateDirectory=nexwatch
 
 [Install]
 WantedBy=multi-user.target

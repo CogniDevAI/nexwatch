@@ -29,14 +29,14 @@ func (c *ProcessesCollector) Collect(ctx context.Context) (map[string]any, error
 	}
 
 	type procInfo struct {
-		PID       int32   `json:"pid"`
-		Name      string  `json:"name"`
-		CPU       float64 `json:"cpu_percent"`
-		Memory    float64 `json:"mem_percent"`
-		RSS       uint64  `json:"rss"`
-		Status    string  `json:"status"`
-		User      string  `json:"user"`
-		CmdLine   string  `json:"cmdline"`
+		PID     int32   `json:"pid"`
+		Name    string  `json:"name"`
+		CPU     float64 `json:"cpu_percent"`
+		Memory  float64 `json:"mem_percent"`
+		RSS     uint64  `json:"rss"`
+		Status  string  `json:"status"`
+		User    string  `json:"user"`
+		CmdLine string  `json:"cmdline"`
 	}
 
 	infos := make([]procInfo, 0, len(procs))

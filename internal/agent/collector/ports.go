@@ -27,15 +27,6 @@ func (c *PortsCollector) Collect(ctx context.Context) (map[string]any, error) {
 		return nil, fmt.Errorf("net connections: %w", err)
 	}
 
-	// Filter to LISTEN state only.
-	type listener struct {
-		Port     uint32 `json:"port"`
-		Protocol string `json:"protocol"`
-		Address  string `json:"address"`
-		PID      int32  `json:"pid"`
-		Process  string `json:"process"`
-	}
-
 	// Deduplicate by port+protocol (there can be multiple entries for the same listener).
 	seen := make(map[string]bool)
 	listeners := make([]map[string]any, 0)

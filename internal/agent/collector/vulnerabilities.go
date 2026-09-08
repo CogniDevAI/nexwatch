@@ -90,46 +90,67 @@ func (c *VulnerabilitiesCollector) checkWorldWritableFiles() []vulnItem {
 			continue
 		}
 
-		files := strings.Split(strings.TrimSpace(string(out)), "\n")
-		wwFiles := []string{}
-		for _, f := range files {
-			f = strings.TrimSpace(f)
-			if f == "" {
-				continue
-			}
-			wwFiles = append(wwFiles, f)
-		}
-
-		if len(wwFiles) > 0 {
-			// Limit reported files to avoid huge payloads.
-			reported := wwFiles
-			if len(reported) > 20 {
-				reported = reported[:20]
-			}
-			items = append(items, vulnItem{
-				Name:           fmt.Sprintf("world_writable_in_%s", strings.ReplaceAll(dir, "/", "_")),
-				Severity:       "high",
-				Description:    fmt.Sprintf("Found %d world-writable files in %s: %s", len(wwFiles), dir, strings.Join(reported, ", ")),
-				Recommendation: fmt.Sprintf("Remove world-writable permission: chmod o-w <file> for files in %s", dir),
-			})
+		if item := evaluateWorldWritableFindOutput(dir, string(out)); item != nil {
+			items = append(items, *item)
 		}
 	}
 
 	// Check /tmp separately (less severe — it's expected to be world-writable).
 	if info, err := os.Stat("/tmp"); err == nil {
-		mode := info.Mode()
-		// /tmp should have sticky bit set.
-		if mode&os.ModeSticky == 0 {
-			items = append(items, vulnItem{
-				Name:           "tmp_no_sticky_bit",
-				Severity:       "medium",
-				Description:    "/tmp does not have the sticky bit set",
-				Recommendation: "Set sticky bit: chmod +t /tmp",
-			})
+		if item := evaluateTmpStickyBit(info.Mode()); item != nil {
+			items = append(items, *item)
 		}
 	}
 
 	return items
+}
+
+// evaluateWorldWritableFindOutput parses the newline-delimited output of the
+// `find <dir> -perm -0002 -type f` command used to locate world-writable
+// files, and builds the corresponding finding (or nil if none were found).
+// It is a pure function over the command output so it can be tested with
+// fixture strings instead of a real filesystem scan.
+func evaluateWorldWritableFindOutput(dir, findOutput string) *vulnItem {
+	files := strings.Split(strings.TrimSpace(findOutput), "\n")
+	wwFiles := []string{}
+	for _, f := range files {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		wwFiles = append(wwFiles, f)
+	}
+
+	if len(wwFiles) == 0 {
+		return nil
+	}
+
+	// Limit reported files to avoid huge payloads.
+	reported := wwFiles
+	if len(reported) > 20 {
+		reported = reported[:20]
+	}
+	return &vulnItem{
+		Name:           fmt.Sprintf("world_writable_in_%s", strings.ReplaceAll(dir, "/", "_")),
+		Severity:       "high",
+		Description:    fmt.Sprintf("Found %d world-writable files in %s: %s", len(wwFiles), dir, strings.Join(reported, ", ")),
+		Recommendation: fmt.Sprintf("Remove world-writable permission: chmod o-w <file> for files in %s", dir),
+	}
+}
+
+// evaluateTmpStickyBit reports a finding when /tmp's mode is missing the
+// sticky bit. It is pure over the mode value so it can be tested without
+// touching the filesystem.
+func evaluateTmpStickyBit(mode os.FileMode) *vulnItem {
+	if mode&os.ModeSticky != 0 {
+		return nil
+	}
+	return &vulnItem{
+		Name:           "tmp_no_sticky_bit",
+		Severity:       "medium",
+		Description:    "/tmp does not have the sticky bit set",
+		Recommendation: "Set sticky bit: chmod +t /tmp",
+	}
 }
 
 // checkSUIDBinaries looks for SUID binaries in unusual locations.
@@ -160,8 +181,21 @@ func (c *VulnerabilitiesCollector) checkSUIDBinaries() []vulnItem {
 		}
 	}
 
+	if item := evaluateSUIDFindOutput(string(out), safeDirs); item != nil {
+		items = append(items, *item)
+	}
+
+	return items
+}
+
+// evaluateSUIDFindOutput parses the newline-delimited output of the
+// `find / -perm -4000 -type f` command used to locate SUID binaries and
+// flags any outside the known-safe directories. It is a pure function over
+// the command output so it can be tested with fixture strings instead of a
+// real filesystem scan.
+func evaluateSUIDFindOutput(findOutput string, safeDirs map[string]bool) *vulnItem {
 	unusualSUID := []string{}
-	files := strings.Split(strings.TrimSpace(string(out)), "\n")
+	files := strings.Split(strings.TrimSpace(findOutput), "\n")
 	for _, f := range files {
 		f = strings.TrimSpace(f)
 		if f == "" {
@@ -182,20 +216,20 @@ func (c *VulnerabilitiesCollector) checkSUIDBinaries() []vulnItem {
 		}
 	}
 
-	if len(unusualSUID) > 0 {
-		reported := unusualSUID
-		if len(reported) > 20 {
-			reported = reported[:20]
-		}
-		items = append(items, vulnItem{
-			Name:           "suid_unusual_locations",
-			Severity:       "high",
-			Description:    fmt.Sprintf("Found %d SUID binaries in unusual locations: %s", len(unusualSUID), strings.Join(reported, ", ")),
-			Recommendation: "Review SUID binaries and remove unnecessary ones: chmod u-s <file>",
-		})
+	if len(unusualSUID) == 0 {
+		return nil
 	}
 
-	return items
+	reported := unusualSUID
+	if len(reported) > 20 {
+		reported = reported[:20]
+	}
+	return &vulnItem{
+		Name:           "suid_unusual_locations",
+		Severity:       "high",
+		Description:    fmt.Sprintf("Found %d SUID binaries in unusual locations: %s", len(unusualSUID), strings.Join(reported, ", ")),
+		Recommendation: "Review SUID binaries and remove unnecessary ones: chmod u-s <file>",
+	}
 }
 
 // checkRootServices identifies services/processes running as root.
@@ -211,17 +245,17 @@ func (c *VulnerabilitiesCollector) checkRootServices(ctx context.Context) []vuln
 
 	// Services that ideally should NOT run as root.
 	riskyAsRoot := map[string]bool{
-		"nginx":    true,
-		"apache2":  true,
-		"httpd":    true,
-		"mysqld":   true,
-		"postgres":  true,
-		"mongod":   true,
+		"nginx":        true,
+		"apache2":      true,
+		"httpd":        true,
+		"mysqld":       true,
+		"postgres":     true,
+		"mongod":       true,
 		"redis-server": true,
-		"node":     true,
-		"java":     true,
-		"python":   true,
-		"python3":  true,
+		"node":         true,
+		"java":         true,
+		"python":       true,
+		"python3":      true,
 	}
 
 	rootServices := []string{}
@@ -240,15 +274,7 @@ func (c *VulnerabilitiesCollector) checkRootServices(ctx context.Context) []vuln
 			continue
 		}
 
-		// Check effective UID (index 1 if available, otherwise 0).
-		isRoot := false
-		if len(uids) > 1 {
-			isRoot = uids[1] == 0
-		} else if len(uids) > 0 {
-			isRoot = uids[0] == 0
-		}
-
-		if isRoot {
+		if isRiskyRootProcess(name, uids, riskyAsRoot) {
 			rootServices = append(rootServices, fmt.Sprintf("%s (PID %d)", name, p.Pid))
 		}
 	}
@@ -270,6 +296,24 @@ func (c *VulnerabilitiesCollector) checkRootServices(ctx context.Context) []vuln
 	return items
 }
 
+// isRiskyRootProcess reports whether a process name is on the risky-as-root
+// list and its effective UID (uids[1] if available, otherwise uids[0]) is
+// 0. It is a pure function over already-fetched process attributes so it
+// can be tested with fixture values instead of live processes.
+func isRiskyRootProcess(name string, uids []uint32, riskyAsRoot map[string]bool) bool {
+	if !riskyAsRoot[name] {
+		return false
+	}
+
+	// Check effective UID (index 1 if available, otherwise 0).
+	if len(uids) > 1 {
+		return uids[1] == 0
+	} else if len(uids) > 0 {
+		return uids[0] == 0
+	}
+	return false
+}
+
 // checkWeakPermissions checks for files with overly permissive permissions.
 func (c *VulnerabilitiesCollector) checkWeakPermissions() []vulnItem {
 	if runtime.GOOS == "windows" {
@@ -280,9 +324,9 @@ func (c *VulnerabilitiesCollector) checkWeakPermissions() []vulnItem {
 
 	// Check common sensitive files.
 	sensitiveFiles := map[string]os.FileMode{
-		"/etc/crontab":     0o644,
+		"/etc/crontab":         0o644,
 		"/etc/ssh/sshd_config": 0o644,
-		"/etc/sudoers":     0o440,
+		"/etc/sudoers":         0o440,
 	}
 
 	for path, maxPerm := range sensitiveFiles {
@@ -291,16 +335,25 @@ func (c *VulnerabilitiesCollector) checkWeakPermissions() []vulnItem {
 			continue // File doesn't exist — skip.
 		}
 
-		perm := info.Mode().Perm()
-		if perm > maxPerm {
-			items = append(items, vulnItem{
-				Name:           fmt.Sprintf("weak_permissions_%s", strings.ReplaceAll(filepath.Base(path), ".", "_")),
-				Severity:       "medium",
-				Description:    fmt.Sprintf("%s has permissions %s (should be %s or more restrictive)", path, perm, maxPerm),
-				Recommendation: fmt.Sprintf("Fix permissions: chmod %o %s", maxPerm, path),
-			})
+		if item := evaluateFilePermission(path, info.Mode().Perm(), maxPerm); item != nil {
+			items = append(items, *item)
 		}
 	}
 
 	return items
+}
+
+// evaluateFilePermission reports a finding when a sensitive file's
+// permission bits exceed the maximum allowed. It is pure over the mode
+// values so it can be tested without touching the filesystem.
+func evaluateFilePermission(path string, perm, maxPerm os.FileMode) *vulnItem {
+	if perm <= maxPerm {
+		return nil
+	}
+	return &vulnItem{
+		Name:           fmt.Sprintf("weak_permissions_%s", strings.ReplaceAll(filepath.Base(path), ".", "_")),
+		Severity:       "medium",
+		Description:    fmt.Sprintf("%s has permissions %s (should be %s or more restrictive)", path, perm, maxPerm),
+		Recommendation: fmt.Sprintf("Fix permissions: chmod %o %s", maxPerm, path),
+	}
 }

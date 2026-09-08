@@ -1,15 +1,24 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # NexWatch Agent Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | sh -s -- --hub ws://hub:8090/ws/agent --token TOKEN
+# Usage: curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ws://hub:8090/ws/agent --token TOKEN
 #
 # Environment variables (alternative to flags):
-#   HUB_URL      - Hub WebSocket URL (e.g. ws://hub:8090/ws/agent)
-#   TOKEN        - Agent authentication token
-#   VERSION      - Agent version to install (default: latest)
-#   INTERVAL     - Collection interval in seconds (default: 10)
-#   MODE         - Agent mode: standard (default) or oracle
-#   ORACLE_HOME  - Oracle Home path (oracle mode only)
-#   ORACLE_SID   - Oracle SID (oracle mode only)
+#   HUB_URL                   - Hub WebSocket URL (e.g. ws://hub:8090/ws/agent)
+#   TOKEN                     - Agent authentication token
+#   VERSION                   - Agent version to install (default: latest)
+#   INTERVAL                  - Collection interval in seconds (default: 10)
+#   MODE                      - Agent mode: standard (default) or oracle
+#   ORACLE_HOME               - Oracle Home path (oracle mode only)
+#   ORACLE_SID                - Oracle SID (oracle mode only)
+#   NEXWATCH_REQUIRE_SIGNATURE - If set (1/true), abort unless the release's
+#                                signature can be verified (see --require-signature)
+#   NEXWATCH_SIGNING_KEY_URL  - Override the URL the release signing public key
+#                                is fetched from (see --signing-key-url)
+#   NEXWATCH_SIGNING_KEY_FILE - Use a local signing public key file instead of
+#                                fetching one (see --signing-key-file)
+#
+# This script is sourceable: when sourced (e.g. by scripts/test-install-agent.sh)
+# it only defines the functions below and does not run main().
 
 set -eu
 
@@ -20,6 +29,7 @@ CONFIG_DIR="/etc/nexwatch"
 SERVICE_NAME="nexwatch-agent"
 REPO="CogniDevAI/nexwatch"
 GITHUB_BASE="https://github.com/${REPO}"
+DEFAULT_SIGNING_KEY_URL="https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/release-signing-key.asc"
 
 # Read from environment or leave empty for flag parsing.
 HUB_URL="${HUB_URL:-}"
@@ -29,6 +39,9 @@ INTERVAL="${INTERVAL:-10}"
 MODE="${MODE:-standard}"
 ORACLE_HOME="${ORACLE_HOME:-}"
 ORACLE_SID="${ORACLE_SID:-}"
+REQUIRE_SIGNATURE="${NEXWATCH_REQUIRE_SIGNATURE:-0}"
+SIGNING_KEY_URL="${NEXWATCH_SIGNING_KEY_URL:-$DEFAULT_SIGNING_KEY_URL}"
+SIGNING_KEY_FILE="${NEXWATCH_SIGNING_KEY_FILE:-}"
 
 # Service user/group — set by create_user based on MODE.
 SERVICE_USER="nexwatch"
@@ -55,74 +68,107 @@ cleanup() {
         rm -rf "$TMP_DIR"
     fi
 }
-trap cleanup EXIT INT TERM
+
+# --- Normalize a boolean-ish flag value to "0" or "1" ---
+normalize_bool() {
+    case "$1" in
+        1|true|TRUE|True|yes|YES|Yes) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+print_help() {
+    echo "NexWatch Agent Installer"
+    echo ""
+    echo "Usage:"
+    echo "  install-agent.sh [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --hub URL             Hub WebSocket URL (required)"
+    echo "  --token TOKEN         Agent authentication token (required)"
+    echo "  --version VER         Agent version (default: latest)"
+    echo "  --interval SECS       Collection interval in seconds (default: 10)"
+    echo "  --mode MODE           Agent mode: standard (default) or oracle"
+    echo "  --oracle-home PATH    Oracle Home path (oracle mode)"
+    echo "  --oracle-sid SID      Oracle SID (oracle mode)"
+    echo "  --require-signature   Abort if the release signature can't be verified"
+    echo "  --signing-key-url URL URL to fetch the release signing public key from"
+    echo "  --signing-key-file F  Use a local signing public key file instead"
+    echo "  --help                Show this help"
+    echo ""
+    echo "Environment variables:"
+    echo "  HUB_URL, TOKEN, VERSION, INTERVAL, MODE, ORACLE_HOME, ORACLE_SID,"
+    echo "  NEXWATCH_REQUIRE_SIGNATURE, NEXWATCH_SIGNING_KEY_URL, NEXWATCH_SIGNING_KEY_FILE"
+}
 
 # --- Parse arguments ---
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --hub)
-            HUB_URL="$2"
-            shift 2
-            ;;
-        --token)
-            TOKEN="$2"
-            shift 2
-            ;;
-        --version)
-            VERSION="$2"
-            shift 2
-            ;;
-        --interval)
-            INTERVAL="$2"
-            shift 2
-            ;;
-        --mode)
-            MODE="$2"
-            shift 2
-            ;;
-        --oracle-home)
-            ORACLE_HOME="$2"
-            shift 2
-            ;;
-        --oracle-sid)
-            ORACLE_SID="$2"
-            shift 2
-            ;;
-        --help|-h)
-            echo "NexWatch Agent Installer"
-            echo ""
-            echo "Usage:"
-            echo "  install-agent.sh [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --hub URL           Hub WebSocket URL (required)"
-            echo "  --token TOKEN       Agent authentication token (required)"
-            echo "  --version VER       Agent version (default: latest)"
-            echo "  --interval SECS     Collection interval in seconds (default: 10)"
-            echo "  --mode MODE         Agent mode: standard (default) or oracle"
-            echo "  --oracle-home PATH  Oracle Home path (oracle mode)"
-            echo "  --oracle-sid SID    Oracle SID (oracle mode)"
-            echo "  --help              Show this help"
-            echo ""
-            echo "Environment variables:"
-            echo "  HUB_URL, TOKEN, VERSION, INTERVAL, MODE, ORACLE_HOME, ORACLE_SID"
-            exit 0
-            ;;
-        *)
-            warn "Unknown option: $1"
-            shift
-            ;;
-    esac
-done
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --hub)
+                HUB_URL="$2"
+                shift 2
+                ;;
+            --token)
+                TOKEN="$2"
+                shift 2
+                ;;
+            --version)
+                VERSION="$2"
+                shift 2
+                ;;
+            --interval)
+                INTERVAL="$2"
+                shift 2
+                ;;
+            --mode)
+                MODE="$2"
+                shift 2
+                ;;
+            --oracle-home)
+                ORACLE_HOME="$2"
+                shift 2
+                ;;
+            --oracle-sid)
+                ORACLE_SID="$2"
+                shift 2
+                ;;
+            --require-signature)
+                REQUIRE_SIGNATURE=1
+                shift
+                ;;
+            --signing-key-url)
+                SIGNING_KEY_URL="$2"
+                shift 2
+                ;;
+            --signing-key-file)
+                SIGNING_KEY_FILE="$2"
+                shift 2
+                ;;
+            --help|-h)
+                print_help
+                exit 0
+                ;;
+            *)
+                warn "Unknown option: $1"
+                shift
+                ;;
+        esac
+    done
+
+    REQUIRE_SIGNATURE=$(normalize_bool "$REQUIRE_SIGNATURE")
+}
 
 # --- Validate required params ---
-if [ -z "$HUB_URL" ]; then
-    error "HUB_URL is required. Use --hub or set HUB_URL environment variable."
-fi
+validate_args() {
+    if [ -z "$HUB_URL" ]; then
+        error "HUB_URL is required. Use --hub or set HUB_URL environment variable."
+    fi
 
-if [ -z "$TOKEN" ]; then
-    error "TOKEN is required. Use --token or set TOKEN environment variable."
-fi
+    if [ -z "$TOKEN" ]; then
+        error "TOKEN is required. Use --token or set TOKEN environment variable."
+    fi
+}
 
 # --- Detect OS and architecture ---
 detect_platform() {
@@ -172,7 +218,7 @@ resolve_version() {
     fi
 }
 
-# --- Verify checksum ---
+# --- Verify checksum (per-file .sha256 fallback path) ---
 verify_checksum() {
     TMP_FILE="$1"
     CHECKSUM_FILE="$2"
@@ -206,6 +252,93 @@ verify_checksum() {
     success "Checksum verified"
 }
 
+# --- Verify release signature (SHA256SUMS + SHA256SUMS.asc), if published ---
+# Returns 0 when the tarball was verified against a signed, trusted SHA256SUMS.
+# Returns 1 when signature verification was skipped (no signature published,
+# or gpg unavailable) — the caller should fall back to the per-file checksum.
+# Aborts the script (via error()) on any verification FAILURE (bad signature,
+# bad key, or hash mismatch) — that is never treated as "skip".
+verify_release_signature() {
+    TARBALL="$1"
+    ARCHIVE="$2"
+
+    if ! command -v gpg > /dev/null 2>&1; then
+        if [ "$REQUIRE_SIGNATURE" = "1" ]; then
+            error "gpg is required for signature verification (--require-signature set) but was not found."
+        fi
+        warn "gpg not found — skipping release signature verification."
+        return 1
+    fi
+
+    SUMS_URL="${GITHUB_BASE}/releases/download/${VERSION}/SHA256SUMS"
+    SIG_URL="${SUMS_URL}.asc"
+    SUMS_FILE="${TMP_DIR}/SHA256SUMS"
+    SIG_FILE="${TMP_DIR}/SHA256SUMS.asc"
+
+    if ! curl -fsSL -o "$SUMS_FILE" "$SUMS_URL" 2>/dev/null || ! curl -fsSL -o "$SIG_FILE" "$SIG_URL" 2>/dev/null; then
+        if [ "$REQUIRE_SIGNATURE" = "1" ]; then
+            error "Release ${VERSION} has no signed SHA256SUMS at ${SUMS_URL} (--require-signature set)."
+        fi
+        warn "Release ${VERSION} has no signed checksums — skipping signature verification."
+        return 1
+    fi
+
+    info "Verifying release signature..."
+
+    GNUPGHOME_DIR="${TMP_DIR}/gnupg"
+    mkdir -p "$GNUPGHOME_DIR"
+    chmod 700 "$GNUPGHOME_DIR"
+
+    if [ -n "$SIGNING_KEY_FILE" ]; then
+        if [ ! -f "$SIGNING_KEY_FILE" ]; then
+            error "Signing key file not found: ${SIGNING_KEY_FILE}"
+        fi
+        KEY_FILE="$SIGNING_KEY_FILE"
+    else
+        KEY_FILE="${TMP_DIR}/release-signing-key.asc"
+        if ! curl -fsSL -o "$KEY_FILE" "$SIGNING_KEY_URL" 2>/dev/null; then
+            if [ "$REQUIRE_SIGNATURE" = "1" ]; then
+                error "Could not fetch signing public key from ${SIGNING_KEY_URL} (--require-signature set)."
+            fi
+            warn "Could not fetch signing public key from ${SIGNING_KEY_URL} — skipping signature verification."
+            return 1
+        fi
+    fi
+
+    if ! GNUPGHOME="$GNUPGHOME_DIR" gpg --batch --quiet --import "$KEY_FILE" 2>/dev/null; then
+        error "Failed to import release signing public key from ${KEY_FILE}."
+    fi
+
+    if ! GNUPGHOME="$GNUPGHOME_DIR" gpg --batch --verify "$SIG_FILE" "$SUMS_FILE" 2>/dev/null; then
+        error "Release signature verification FAILED for ${VERSION}. The release may be tampered with — aborting."
+    fi
+
+    success "Release signature verified"
+
+    # Cross-check the tarball's own hash against the entry in the signed SHA256SUMS.
+    EXPECTED=$(awk -v f="$ARCHIVE" '$2 == f {print $1}' "$SUMS_FILE")
+    if [ -z "$EXPECTED" ]; then
+        error "No checksum entry for ${ARCHIVE} in the signed SHA256SUMS. Aborting."
+    fi
+
+    SHA256_CMD=""
+    if command -v sha256sum > /dev/null 2>&1; then
+        SHA256_CMD="sha256sum"
+    elif command -v shasum > /dev/null 2>&1; then
+        SHA256_CMD="shasum -a 256"
+    else
+        error "No sha256sum or shasum found — cannot verify the signed checksum."
+    fi
+
+    ACTUAL=$(${SHA256_CMD} "$TARBALL" | awk '{print $1}')
+    if [ "$ACTUAL" != "$EXPECTED" ]; then
+        error "Checksum mismatch against signed SHA256SUMS. Expected: ${EXPECTED}  Got: ${ACTUAL}. Aborting."
+    fi
+
+    success "Tarball hash matches the signed SHA256SUMS"
+    return 0
+}
+
 # --- Download binary ---
 download_binary() {
     ARCHIVE_NAME="${BINARY_NAME}_${VERSION#v}_${OS}_${ARCH}.tar.gz"
@@ -221,11 +354,15 @@ download_binary() {
         error "Download failed. Check that version ${VERSION} exists at ${DOWNLOAD_URL}"
     fi
 
-    info "Downloading checksum..."
-    if curl -fsSL -o "$TMP_CHECKSUM" "$CHECKSUM_URL" 2>/dev/null; then
-        verify_checksum "$TMP_FILE" "$TMP_CHECKSUM"
-    else
-        warn "Checksum file not found at ${CHECKSUM_URL} — skipping verification."
+    if ! verify_release_signature "$TMP_FILE" "$ARCHIVE_NAME"; then
+        # No signature to verify against (or gpg missing) — fall back to the
+        # per-file checksum, which only protects against transport corruption.
+        info "Downloading checksum..."
+        if curl -fsSL -o "$TMP_CHECKSUM" "$CHECKSUM_URL" 2>/dev/null; then
+            verify_checksum "$TMP_FILE" "$TMP_CHECKSUM"
+        else
+            warn "Checksum file not found at ${CHECKSUM_URL} — skipping verification."
+        fi
     fi
 
     info "Extracting..."
@@ -250,6 +387,25 @@ download_binary() {
     success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
 }
 
+# --- Add a user to a supplementary group, if that group exists on this host ---
+# Used for both docker (standard mode only) and the journald/log-reading
+# groups (every mode, since log shipping — internal/agent/logs — applies
+# regardless of standard vs. Oracle mode).
+add_to_group_if_exists() {
+    user="$1"
+    group="$2"
+    if getent group "$group" > /dev/null 2>&1; then
+        if ! id -nG "$user" | grep -qw "$group"; then
+            usermod -aG "$group" "$user"
+            success "Added '${user}' to '${group}' group"
+        else
+            info "User '${user}' is already in '${group}' group"
+        fi
+    else
+        info "Group '${group}' not found — skipping"
+    fi
+}
+
 # --- Create system user ---
 create_user() {
     if [ "$MODE" = "oracle" ]; then
@@ -264,6 +420,12 @@ create_user() {
                     usermod -aG dba oracle
                 fi
             fi
+            # Additive to the dba membership above: lets the oracle user
+            # read journald (log_sources: journald) and /var/log
+            # (log_sources: file) for the log-shipping feature, the same
+            # as standard mode gets below.
+            add_to_group_if_exists oracle systemd-journal
+            add_to_group_if_exists oracle adm
         else
             error "Oracle mode requires an existing 'oracle' OS user. Is Oracle installed?"
         fi
@@ -282,16 +444,14 @@ create_user() {
     fi
 
     # Add to docker group if it exists.
-    if getent group docker > /dev/null 2>&1; then
-        if ! id -nG nexwatch | grep -qw docker; then
-            usermod -aG docker nexwatch
-            success "Added 'nexwatch' to 'docker' group"
-        else
-            info "User 'nexwatch' is already in 'docker' group"
-        fi
-    else
-        info "Docker group not found — skipping docker group membership"
-    fi
+    add_to_group_if_exists nexwatch docker
+
+    # Lets the nexwatch user read journald (log_sources: journald) and
+    # /var/log (log_sources: file) for the log-shipping feature, without
+    # running as root. Both groups exist by default on any systemd-based
+    # Linux distribution.
+    add_to_group_if_exists nexwatch systemd-journal
+    add_to_group_if_exists nexwatch adm
 }
 
 # --- Create config ---
@@ -405,6 +565,23 @@ create_service() {
         DOCKER_GROUP_LINE="SupplementaryGroups=docker"
     fi
 
+    # Build the log-shipping supplementary group line — applies to both
+    # standard and Oracle mode (additive to Oracle's own dba/docker
+    # handling), so the agent can read journald and /var/log without
+    # running as root. Only includes groups that actually exist on this
+    # host, and omits the line entirely if neither does.
+    LOG_GROUPS=""
+    if getent group systemd-journal > /dev/null 2>&1; then
+        LOG_GROUPS="systemd-journal"
+    fi
+    if getent group adm > /dev/null 2>&1; then
+        LOG_GROUPS="${LOG_GROUPS:+${LOG_GROUPS} }adm"
+    fi
+    LOG_GROUPS_LINE=""
+    if [ -n "$LOG_GROUPS" ]; then
+        LOG_GROUPS_LINE="SupplementaryGroups=${LOG_GROUPS}"
+    fi
+
     # Oracle mode: looser security (oracle user needs full /proc and oracle dirs).
     if [ "$MODE" = "oracle" ]; then
         cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<UNIT
@@ -424,9 +601,20 @@ Environment=LD_LIBRARY_PATH=${ORACLE_HOME}/lib
 Environment=PATH=${ORACLE_HOME}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=-/etc/nexwatch/agent.env
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
-Restart=on-failure
-RestartSec=5
+# Restart=always (not on-failure): a hub-initiated self-update
+# (internal/agent/update) re-execs the new binary in place when possible,
+# but falls back to a clean exit(0) when re-exec itself isn't available —
+# Restart=on-failure does NOT restart systemd units on a clean exit 0.
+Restart=always
+RestartSec=2
 LimitNOFILE=65536
+${LOG_GROUPS_LINE}
+
+# Writable /var/lib/nexwatch for the cve_scan collector's scanner cache
+# (TRIVY_CACHE_DIR/GRYPE_DB_CACHE_DIR). systemd creates/owns this
+# directory for ${SERVICE_USER}:${SERVICE_GROUP} regardless of the looser
+# Oracle-mode sandboxing below.
+StateDirectory=nexwatch
 
 # Logging
 StandardOutput=journal
@@ -450,8 +638,12 @@ User=${SERVICE_USER}
 Group=${SERVICE_GROUP}
 EnvironmentFile=-/etc/nexwatch/agent.env
 ExecStart=${INSTALL_DIR}/${BINARY_NAME}
-Restart=on-failure
-RestartSec=5
+# Restart=always (not on-failure): a hub-initiated self-update
+# (internal/agent/update) re-execs the new binary in place when possible,
+# but falls back to a clean exit(0) when re-exec itself isn't available —
+# Restart=on-failure does NOT restart systemd units on a clean exit 0.
+Restart=always
+RestartSec=2
 LimitNOFILE=65536
 
 # Security hardening
@@ -461,9 +653,15 @@ ProtectHome=true
 ReadWritePaths=${CONFIG_DIR}
 PrivateTmp=true
 ${DOCKER_GROUP_LINE}
+${LOG_GROUPS_LINE}
 
 # Allow reading /proc and /sys for metric collectors (diskio, connections, processes)
 ReadOnlyPaths=/proc /sys
+
+# Writable /var/lib/nexwatch under ProtectSystem=strict, for the cve_scan
+# collector's scanner cache (TRIVY_CACHE_DIR/GRYPE_DB_CACHE_DIR — see
+# cve_scan_cache_dir in agent.yaml). systemd creates/owns this directory.
+StateDirectory=nexwatch
 
 # Logging
 StandardOutput=journal
@@ -502,6 +700,8 @@ enable_and_start() {
 
 # --- Main ---
 main() {
+    trap cleanup EXIT INT TERM
+
     echo ""
     echo "  _   _          __        __    _       _     "
     echo " | \ | | _____  _\ \      / /_ _| |_ ___| |__  "
@@ -512,6 +712,8 @@ main() {
     echo " Agent Installer"
     echo ""
 
+    parse_args "$@"
+    validate_args
     check_root
     detect_platform
     resolve_version
@@ -533,4 +735,11 @@ main() {
     echo ""
 }
 
-main
+# --- Entrypoint guard ---
+# `return` only succeeds when this file is being sourced (e.g. by
+# scripts/test-install-agent.sh). When executed directly — including via
+# `curl | bash -s --`, where there is no on-disk file and BASH_SOURCE[0] is
+# unset — `return` at the top level fails, so main() runs.
+if ! (return 0 2>/dev/null); then
+    main "$@"
+fi

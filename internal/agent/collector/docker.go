@@ -14,26 +14,49 @@ import (
 
 // DockerCollector gathers metrics from running Docker containers.
 type DockerCollector struct {
-	socketPath string
+	socketPath   string
+	updateChecks bool
+	digestCache  *imageDigestCache
 }
 
 // NewDockerCollector creates a new Docker collector.
-// socketPath defaults to the standard Docker socket if empty.
-func NewDockerCollector(socketPath string) *DockerCollector {
+// socketPath defaults to the standard Docker socket if empty. updateChecks
+// enables per-image registry digest comparison (see docker_update.go); it
+// is best-effort and never fails the collection when a registry is
+// unreachable.
+func NewDockerCollector(socketPath string, updateChecks bool) *DockerCollector {
 	if socketPath == "" {
 		socketPath = "/var/run/docker.sock"
 	}
-	return &DockerCollector{socketPath: socketPath}
+	return &DockerCollector{
+		socketPath:   socketPath,
+		updateChecks: updateChecks,
+		digestCache:  newImageDigestCache(),
+	}
 }
 
 // Name returns the collector identifier.
 func (c *DockerCollector) Name() string { return "docker" }
 
+// DockerHostURL builds the URL passed to client.WithHost from a configured
+// docker_socket value. A value that already carries a scheme (e.g. the
+// Windows default "npipe:////./pipe/docker_engine", or an explicit
+// "tcp://…") is passed through unchanged; a bare filesystem path (the
+// Linux/macOS default "/var/run/docker.sock") is prefixed with "unix://",
+// matching this collector's and cmd/agent/main.go's docker_action
+// command's previous hardcoded behavior for that case.
+func DockerHostURL(socketPath string) string {
+	if strings.Contains(socketPath, "://") {
+		return socketPath
+	}
+	return "unix://" + socketPath
+}
+
 // Collect gathers container list and per-container resource usage.
 // Returns empty data (no error) when Docker is not available.
 func (c *DockerCollector) Collect(ctx context.Context) (map[string]any, error) {
 	cli, err := client.NewClientWithOpts(
-		client.WithHost("unix://"+c.socketPath),
+		client.WithHost(DockerHostURL(c.socketPath)),
 		client.WithAPIVersionNegotiation(),
 	)
 	if err != nil {
@@ -44,7 +67,7 @@ func (c *DockerCollector) Collect(ctx context.Context) (map[string]any, error) {
 			"containers": []map[string]any{},
 		}, nil
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	// Verify connectivity with a ping.
 	_, err = cli.Ping(ctx)
@@ -74,12 +97,18 @@ func (c *DockerCollector) Collect(ctx context.Context) (map[string]any, error) {
 		}
 
 		entry := map[string]any{
-			"id":      ctr.ID[:12],
-			"name":    name,
-			"image":   ctr.Image,
-			"status":  ctr.Status,
-			"state":   ctr.State,
-			"created": ctr.Created,
+			// "container_id" (not "id") to match what
+			// metrics.Service.upsertDockerContainer reads when populating
+			// the "docker_containers" collection — this was previously a
+			// silent mismatch ("id" here vs. "container_id" there) that
+			// meant docker_containers was never actually populated in
+			// production, discovered via a live agent+hub end-to-end run.
+			"container_id": ctr.ID[:12],
+			"name":         name,
+			"image":        ctr.Image,
+			"status":       ctr.Status,
+			"state":        ctr.State,
+			"created":      ctr.Created,
 		}
 
 		// Only fetch stats for running containers.
@@ -89,6 +118,15 @@ func (c *DockerCollector) Collect(ctx context.Context) (map[string]any, error) {
 				for k, v := range stats {
 					entry[k] = v
 				}
+			}
+		}
+
+		if c.updateChecks {
+			update := checkImageUpdate(ctx, cli, c.digestCache, ctr.ImageID, ctr.Image)
+			if update.Checked {
+				entry["image_digest"] = update.LocalDigest
+				entry["remote_digest"] = update.RemoteDigest
+				entry["update_available"] = update.UpdateAvailable
 			}
 		}
 
@@ -108,7 +146,7 @@ func getContainerStats(ctx context.Context, cli *client.Client, containerID stri
 	if err != nil {
 		return nil, fmt.Errorf("container stats: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -140,11 +178,19 @@ func getContainerStats(ctx context.Context, cli *client.Client, containerID stri
 
 	return map[string]any{
 		"cpu_percent": cpuPercent,
-		"mem_usage":   memUsage,
-		"mem_limit":   memLimit,
-		"mem_percent": memPercent,
-		"net_rx":      netRx,
-		"net_tx":      netTx,
+		// "memory_usage"/"memory_limit"/"network_rx"/"network_tx" (not the
+		// shorter "mem_usage"/"mem_limit"/"net_rx"/"net_tx") to match the
+		// "docker_containers" collection's field names and what
+		// metrics.Service.upsertDockerContainer reads — another
+		// pre-existing key mismatch (alongside "container_id"/"id") found
+		// via a live agent+hub end-to-end run: these stats reached the raw
+		// "metrics" JSON blob fine but were silently dropped when
+		// upserting docker_containers.
+		"memory_usage": memUsage,
+		"memory_limit": memLimit,
+		"mem_percent":  memPercent,
+		"network_rx":   netRx,
+		"network_tx":   netTx,
 	}, nil
 }
 

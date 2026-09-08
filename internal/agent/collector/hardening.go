@@ -41,6 +41,8 @@ func (c *HardeningCollector) Collect(ctx context.Context) (map[string]any, error
 	checks = append(checks, c.checkShadowPermissions())
 	checks = append(checks, c.checkExtraRootUsers())
 	checks = append(checks, c.checkDangerousPorts(ctx)...)
+	checks = append(checks, c.checkWindowsDefenderStatus())
+	checks = append(checks, c.checkRDPStatus())
 
 	// Calculate score.
 	total := 0
@@ -110,7 +112,14 @@ func (c *HardeningCollector) checkSSHRootLogin() checkResult {
 		}
 	}
 
-	content := string(data)
+	return evaluateSSHRootLoginConfig(string(data))
+}
+
+// evaluateSSHRootLoginConfig inspects the content of an sshd_config file for
+// the PermitRootLogin directive and reports whether root login is
+// restricted. It is a pure function over the file content so the parsing
+// logic can be tested with fixture strings instead of a real sshd_config.
+func evaluateSSHRootLoginConfig(content string) checkResult {
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -156,6 +165,8 @@ func (c *HardeningCollector) checkFirewall() checkResult {
 		return c.checkFirewallLinux()
 	case "darwin":
 		return c.checkFirewallDarwin()
+	case "windows":
+		return c.checkFirewallWindows()
 	default:
 		return checkResult{
 			Name:        "firewall_active",
@@ -262,6 +273,165 @@ func (c *HardeningCollector) checkFirewallDarwin() checkResult {
 	}
 }
 
+// checkFirewallWindows checks Windows Firewall's per-profile enabled state
+// via netsh, which ships with every supported Windows version — no
+// PowerShell dependency needed for this one. Parsing lives in the pure
+// evaluateWindowsFirewallOutput so it is testable with fixture output.
+func (c *HardeningCollector) checkFirewallWindows() checkResult {
+	out, err := exec.Command("netsh", "advfirewall", "show", "allprofiles", "state").CombinedOutput()
+	if err != nil {
+		return checkResult{
+			Name:        "firewall_active",
+			Status:      "skip",
+			Description: fmt.Sprintf("could not run netsh advfirewall: %v", err),
+			Severity:    "high",
+		}
+	}
+	return evaluateWindowsFirewallOutput(string(out))
+}
+
+// evaluateWindowsFirewallOutput parses `netsh advfirewall show allprofiles
+// state` output (one "State  ON"/"State  OFF" line per profile —
+// Domain/Private/Public) into a checkResult. It is pure over the command's
+// output text so it can be tested with fixture strings instead of a real
+// netsh invocation (this repo's Linux/macOS dev and CI machines have no
+// netsh at all).
+func evaluateWindowsFirewallOutput(output string) checkResult {
+	var states []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "State") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			states = append(states, strings.ToUpper(fields[len(fields)-1]))
+		}
+	}
+
+	if len(states) == 0 {
+		return checkResult{
+			Name:        "firewall_active",
+			Status:      "skip",
+			Description: "could not parse netsh advfirewall output",
+			Severity:    "high",
+		}
+	}
+
+	for _, s := range states {
+		if s != "ON" {
+			return checkResult{
+				Name:        "firewall_active",
+				Status:      "fail",
+				Description: "Windows Firewall is disabled on at least one profile",
+				Severity:    "high",
+			}
+		}
+	}
+
+	return checkResult{
+		Name:        "firewall_active",
+		Status:      "pass",
+		Description: fmt.Sprintf("Windows Firewall is enabled on all %d profile(s)", len(states)),
+		Severity:    "high",
+	}
+}
+
+// checkWindowsDefenderStatus reports Windows Defender's real-time
+// protection state via PowerShell's Get-MpComputerStatus cmdlet. It skips
+// (rather than fails) on any other OS, and skips just as gracefully when
+// PowerShell or the Defender module itself isn't present — e.g. a Windows
+// Server Core install without the module, or a host running a third-party
+// antivirus that has disabled the Defender cmdlets — since that is a
+// legitimate configuration, not a probe failure worth surfacing as
+// warn/fail.
+func (c *HardeningCollector) checkWindowsDefenderStatus() checkResult {
+	if runtime.GOOS != "windows" {
+		return checkResult{
+			Name:        "defender_realtime_protection",
+			Status:      "skip",
+			Description: fmt.Sprintf("Windows Defender check not applicable on %s", runtime.GOOS),
+			Severity:    "high",
+		}
+	}
+
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"(Get-MpComputerStatus).RealTimeProtectionEnabled").CombinedOutput()
+	if err != nil {
+		return checkResult{
+			Name:        "defender_realtime_protection",
+			Status:      "skip",
+			Description: fmt.Sprintf("could not query Windows Defender status: %v", err),
+			Severity:    "high",
+		}
+	}
+	return evaluateWindowsDefenderOutput(string(out))
+}
+
+// evaluateWindowsDefenderOutput parses Get-MpComputerStatus's
+// RealTimeProtectionEnabled output ("True"/"False", plus a trailing
+// newline) into a checkResult. Pure over the output text for the same
+// testability reason as evaluateWindowsFirewallOutput above.
+func evaluateWindowsDefenderOutput(output string) checkResult {
+	switch strings.ToLower(strings.TrimSpace(output)) {
+	case "true":
+		return checkResult{
+			Name:        "defender_realtime_protection",
+			Status:      "pass",
+			Description: "Windows Defender real-time protection is enabled",
+			Severity:    "high",
+		}
+	case "false":
+		return checkResult{
+			Name:        "defender_realtime_protection",
+			Status:      "fail",
+			Description: "Windows Defender real-time protection is disabled",
+			Severity:    "high",
+		}
+	default:
+		return checkResult{
+			Name:        "defender_realtime_protection",
+			Status:      "skip",
+			Description: "could not determine Windows Defender status (Get-MpComputerStatus unavailable)",
+			Severity:    "high",
+		}
+	}
+}
+
+// evaluateRDPDenyFlag interprets the Windows "fDenyTSConnections" registry
+// value (HKLM\System\CurrentControlSet\Control\Terminal Server — 0 means
+// Remote Desktop is enabled, non-zero means disabled) into a checkResult.
+// ok is false when the value could not be read at all (missing key/value,
+// access denied, or simply not running on Windows — see
+// hardening_windows.go/hardening_other.go), in which case the check is
+// skipped rather than guessed. Kept pure (no registry access itself) so it
+// is testable on every platform, including this repo's own Linux/macOS
+// dev and CI machines, which cannot read a Windows registry at all.
+func evaluateRDPDenyFlag(denyTSConnections uint64, ok bool) checkResult {
+	if !ok {
+		return checkResult{
+			Name:        "rdp_exposure",
+			Status:      "skip",
+			Description: "could not read fDenyTSConnections from the registry",
+			Severity:    "medium",
+		}
+	}
+	if denyTSConnections == 0 {
+		return checkResult{
+			Name:        "rdp_exposure",
+			Status:      "warn",
+			Description: "Remote Desktop (RDP) is enabled — ensure it is intentional and properly secured",
+			Severity:    "medium",
+		}
+	}
+	return checkResult{
+		Name:        "rdp_exposure",
+		Status:      "pass",
+		Description: "Remote Desktop (RDP) is disabled",
+		Severity:    "medium",
+	}
+}
+
 // checkPasswdPermissions verifies /etc/passwd has correct permissions.
 func (c *HardeningCollector) checkPasswdPermissions() checkResult {
 	if runtime.GOOS == "windows" {
@@ -283,7 +453,13 @@ func (c *HardeningCollector) checkPasswdPermissions() checkResult {
 		}
 	}
 
-	mode := info.Mode().Perm()
+	return evaluatePasswdPermissions(info.Mode().Perm())
+}
+
+// evaluatePasswdPermissions checks a /etc/passwd file mode for group/other
+// write bits. It is pure over the mode value so it can be tested without
+// touching the filesystem.
+func evaluatePasswdPermissions(mode os.FileMode) checkResult {
 	if mode&0o022 == 0 { // No write by group or others.
 		return checkResult{
 			Name:        "passwd_permissions",
@@ -322,7 +498,13 @@ func (c *HardeningCollector) checkShadowPermissions() checkResult {
 		}
 	}
 
-	mode := info.Mode().Perm()
+	return evaluateShadowPermissions(info.Mode().Perm())
+}
+
+// evaluateShadowPermissions checks a /etc/shadow file mode for
+// read/write/exec-by-others or write-by-group bits. It is pure over the
+// mode value so it can be tested without touching the filesystem.
+func evaluateShadowPermissions(mode os.FileMode) checkResult {
 	// Shadow should be readable only by root (0600 or 0640).
 	if mode&0o037 == 0 { // No read/write/exec by others, no write by group.
 		return checkResult{
@@ -362,8 +544,15 @@ func (c *HardeningCollector) checkExtraRootUsers() checkResult {
 		}
 	}
 
+	return evaluateExtraRootUsers(string(data))
+}
+
+// evaluateExtraRootUsers scans /etc/passwd-formatted content for accounts
+// with UID 0. It is a pure function over the file content so the parsing
+// logic can be tested with fixture strings instead of a real /etc/passwd.
+func evaluateExtraRootUsers(passwdContent string) checkResult {
 	rootUsers := []string{}
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(strings.NewReader(passwdContent))
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Split(line, ":")
@@ -419,6 +608,14 @@ func (c *HardeningCollector) checkDangerousPorts(ctx context.Context) []checkRes
 		}
 	}
 
+	return evaluateDangerousPorts(dangerousPorts, listeningPorts)
+}
+
+// evaluateDangerousPorts reports pass/fail for each dangerous port depending
+// on whether it appears in the listening-ports set. It is a pure function
+// over both maps so it can be tested without a real network connection
+// snapshot.
+func evaluateDangerousPorts(dangerousPorts map[uint32]string, listeningPorts map[uint32]bool) []checkResult {
 	results := make([]checkResult, 0, len(dangerousPorts))
 	for port, svc := range dangerousPorts {
 		if listeningPorts[port] {
