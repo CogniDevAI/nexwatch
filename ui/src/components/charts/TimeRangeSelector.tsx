@@ -18,10 +18,7 @@ interface TimeRangeSelectorProps {
   onChange: (range: { value: string; start: number; end: number }) => void;
 }
 
-export function TimeRangeSelector({
-  selected,
-  onChange,
-}: TimeRangeSelectorProps) {
+export function TimeRangeSelector({ selected, onChange }: TimeRangeSelectorProps) {
   function handleClick(option: TimeRangeOption) {
     const end = Math.floor(Date.now() / 1000);
     const start = end - option.duration;
@@ -29,15 +26,22 @@ export function TimeRangeSelector({
   }
 
   return (
-    <div className="inline-flex rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-1 gap-0.5">
+    <div
+      role="radiogroup"
+      aria-label="Time range"
+      className="inline-flex gap-0.5 rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-panel)] p-1"
+    >
       {TIME_RANGES.map((option) => (
         <button
           key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={selected === option.value}
           onClick={() => handleClick(option)}
-          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150 ${
+          className={`rounded-[var(--radius-chip)] px-3 py-1.5 text-xs font-medium transition-colors ${
             selected === option.value
-              ? "bg-[var(--color-accent-cyan)]/15 text-[var(--color-accent-cyan)] shadow-sm"
-              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]"
+              ? "bg-[var(--color-signal)]/15 text-[var(--color-signal)]"
+              : "text-[var(--color-ink-muted)] hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]"
           }`}
         >
           {option.label}

@@ -3,10 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NexWatch</title>
+    <!-- DESIGN.md §1 --color-void: matches the app's own dark background,
+         instead of introducing a second, unused brand color for browser
+         chrome / iOS status bar tinting (F11 — installable PWA). -->
+    <meta name="theme-color" content="#0a0e16" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="NexWatch" />
+    <title>NexWatch — Dashboard</title>
   </head>
-  <body class="bg-[#0d1117] text-gray-100 antialiased">
+  <body class="bg-[#0a0e16] text-[#e7ecf3] antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

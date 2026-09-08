@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="NexWatch">
+  <rect width="32" height="32" rx="7" fill="#0a0e16" />
+  <path
+    d="M4 18h4l2.4-7.2c.3-.9 1.6-.9 1.9 0L15.5 21c.3.9 1.6.9 1.9 0l2.7-8.1c.3-.9 1.6-.9 1.9 0L23.4 18H28"
+    fill="none"
+    stroke="#5b9dff"
+    stroke-width="2.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

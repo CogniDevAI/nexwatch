@@ -31,33 +31,29 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   subscribeToAgents: () => {
-    const unsubscribePromise = pb
-      .collection("agents")
-      .subscribe<Agent>("*", (event) => {
-        const { agents } = get();
+    const unsubscribePromise = pb.collection("agents").subscribe<Agent>("*", (event) => {
+      const { agents } = get();
 
-        switch (event.action) {
-          case "create":
-            set({ agents: [event.record, ...agents] });
-            break;
-          case "update":
-            set({
-              agents: agents.map((a) =>
-                a.id === event.record.id ? event.record : a,
-              ),
-            });
-            break;
-          case "delete":
-            set({
-              agents: agents.filter((a) => a.id !== event.record.id),
-            });
-            break;
-        }
-      });
+      switch (event.action) {
+        case "create":
+          set({ agents: [event.record, ...agents] });
+          break;
+        case "update":
+          set({
+            agents: agents.map((a) => (a.id === event.record.id ? event.record : a)),
+          });
+          break;
+        case "delete":
+          set({
+            agents: agents.filter((a) => a.id !== event.record.id),
+          });
+          break;
+      }
+    });
 
     // Return cleanup function
     return () => {
-      unsubscribePromise.then((unsub) => unsub());
+      void unsubscribePromise.then((unsub) => unsub());
     };
   },
 }));

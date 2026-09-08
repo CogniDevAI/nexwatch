@@ -1,39 +1,93 @@
 @import "tailwindcss";
 
-/*
- * NexWatch — CogniDevAI Dark Theme
- * Primary bg: #0a0a0f (darkest)
- * Surface:    #111118
- * Elevated:   #1a1a24
- * Border:     #1e1e2e (subtle)
- * Cyan:       #06b6d4 (primary accent)
- * Purple:     #8b5cf6 (secondary accent)
- * Green:      #10b981 (success / online)
- * Red:        #ef4444 (error / offline)
- * Yellow:     #f59e0b (warning)
- */
+/* Self-hosted fonts (no runtime Google Fonts request — the hub often runs with
+   no internet access). See ui/DESIGN.md for the full rationale.
+   Latin + Latin Extended subsets only (covers English UI copy plus accented
+   hostnames/usernames) — the cyrillic/greek/vietnamese subsets fontsource's
+   default *.css entrypoint pulls in are unused weight, so importing the
+   per-subset files keeps the self-hosted footprint small. */
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-500.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/ibm-plex-sans/latin-700.css";
+@import "@fontsource/ibm-plex-sans/latin-ext-400.css";
+@import "@fontsource/ibm-plex-sans/latin-ext-500.css";
+@import "@fontsource/ibm-plex-sans/latin-ext-600.css";
+@import "@fontsource/ibm-plex-sans/latin-ext-700.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fontsource/ibm-plex-mono/latin-600.css";
+@import "@fontsource/ibm-plex-mono/latin-ext-400.css";
+@import "@fontsource/ibm-plex-mono/latin-ext-500.css";
+@import "@fontsource/ibm-plex-mono/latin-ext-600.css";
 
+/*
+ * NexWatch design tokens — see ui/DESIGN.md for the full rationale.
+ *
+ * Base palette (5): void, panel, panel-raised, line, signal.
+ * Status colors are a separate semantic set, independent of the brand
+ * accent, each paired with a fixed icon shape in <StatusIndicator> so
+ * color-blind readers never depend on hue alone.
+ */
 @theme {
-  --color-bg-primary: #0a0a0f;
-  --color-bg-surface: #111118;
-  --color-bg-elevated: #1a1a24;
-  --color-border-default: #1e1e2e;
-  --color-border-muted: #16161f;
-  --color-accent-cyan: #06b6d4;
-  --color-accent-purple: #8b5cf6;
-  --color-accent-green: #10b981;
-  --color-accent-red: #ef4444;
-  --color-accent-yellow: #f59e0b;
-  --color-text-primary: #f1f5f9;
-  --color-text-secondary: #94a3b8;
-  --color-text-muted: #475569;
+  /* Surfaces */
+  --color-void: #0a0e16;
+  --color-panel: #121926;
+  --color-panel-raised: #1a2333;
+  --color-line: #232d3d;
+  --color-line-soft: #1a2230;
+
+  /* Brand accent — interactive elements only, never status */
+  --color-signal: #5b9dff;
+  --color-signal-muted: #3d6cb3;
+
+  /* Text */
+  --color-ink: #e7ecf3;
+  --color-ink-muted: #93a0b4;
+  --color-ink-faint: #57647a;
+
+  /* Status — independent of --color-signal */
+  --color-ok: #34d399;
+  --color-warn: #f5a524;
+  --color-critical: #f5484f;
+  --color-offline: #5b6576;
+  --color-severity-high: #f97a3d;
+
+  /* Typography */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Type scale — Elements of Typographic Style ratios, tuned for UI density */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.4;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.5;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.55;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.6;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 1.625rem;
+  --text-2xl--line-height: 1.25;
+  --text-3xl: 2.25rem;
+  --text-3xl--line-height: 1.15;
+
+  /* Radius — small and consistent; no pill cards, no zero-radius broadsheet look */
+  --radius-panel: 0.5rem;
+  --radius-control: 0.375rem;
+  --radius-chip: 0.25rem;
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
 body {
-  background-color: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    sans-serif;
+  background-color: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -49,23 +103,23 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border-default);
+  background: var(--color-line);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-muted);
+  background: var(--color-ink-faint);
 }
 
-/* uPlot dark theme overrides */
+/* uPlot theme overrides — chart chrome follows the same tokens as everything else */
 .u-wrap {
   background: transparent !important;
 }
 
 .u-legend {
-  font-family: "Inter", sans-serif !important;
+  font-family: var(--font-mono) !important;
   font-size: 11px !important;
-  color: var(--color-text-secondary) !important;
+  color: var(--color-ink-muted) !important;
 }
 
 .u-legend .u-series > * {
@@ -73,30 +127,58 @@ body {
 }
 
 .u-legend .u-value {
-  color: var(--color-text-primary) !important;
+  color: var(--color-ink) !important;
 }
 
 .u-cursor-x,
 .u-cursor-y {
-  border-color: var(--color-border-default) !important;
+  border-color: var(--color-line) !important;
 }
 
-/* Smooth transitions for interactive elements */
+/* Transitions: fast, color/opacity only, never movement — see DESIGN.md §5 */
 a,
 button {
   transition-property: color, background-color, border-color, opacity;
-  transition-duration: 150ms;
-  transition-timing-function: ease;
+  transition-duration: 120ms;
+  transition-timing-function: var(--ease-standard);
 }
 
-/* Focus ring utility */
+/* Focus ring */
 :focus-visible {
-  outline: 2px solid var(--color-accent-cyan);
+  outline: 2px solid var(--color-signal);
   outline-offset: 2px;
 }
 
-/* Selection color */
 ::selection {
-  background: var(--color-accent-cyan);
-  color: var(--color-bg-primary);
+  background: var(--color-signal);
+  color: var(--color-void);
+}
+
+/* The one deliberate non-user-triggered motion in the whole app: a slow pulse
+   on critical/offline Signal Rail ticks, so a peripheral glance catches what
+   needs attention. See DESIGN.md §5. Disabled under reduced motion. */
+@keyframes signal-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.signal-pulse {
+  animation: signal-pulse 2s var(--ease-standard) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signal-pulse {
+    animation: none;
+  }
+
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
