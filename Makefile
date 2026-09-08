@@ -1,4 +1,4 @@
-.PHONY: build-ui build-hub build-agent build-agent-windows build-all dev-hub dev-agent dev-ui clean release-agent checksums test-go lint-go fmt-go test-ui lint-ui fmt-ui test lint fmt
+.PHONY: build-ui build-hub build-agent build-agent-windows build-all dev-hub dev-agent dev-ui clean release-agent checksums test-go lint-go fmt-go test-ui lint-ui fmt-ui typecheck-ui validate-ui test lint fmt
 
 VERSION ?= dev
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
@@ -49,7 +49,7 @@ dev-ui:
 ## Test and lint targets
 
 test-go:
-	go test -race -cover -timeout 30m ./...
+	go test -race -cover -timeout 30m -p 2 ./...
 
 lint-go:
 	golangci-lint run ./...
@@ -66,7 +66,13 @@ lint-ui:
 fmt-ui:
 	cd ui && pnpm format
 
-test: test-go test-ui
+typecheck-ui:
+	cd ui && pnpm typecheck
+
+validate-ui:
+	cd ui && pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
+
+test: test-go validate-ui
 
 lint: lint-go lint-ui
 

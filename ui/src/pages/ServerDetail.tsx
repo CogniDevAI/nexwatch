@@ -54,7 +54,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { PlatformUnsupportedState } from "@/components/ui/PlatformUnsupportedState";
 import { Tabs } from "@/components/ui/Tabs";
 import { PlatformIcon } from "@/components/ui/PlatformIcon";
-import { Panel } from "@/components/ui/Panel";
+import { Panel, SectionHeader } from "@/components/ui/Panel";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/Button";
 import { TagChips } from "@/components/ui/TagChips";
@@ -174,6 +174,15 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
+/** Left status rail for the host identity band — the host's live status stated
+ *  on the left edge of its own header, the same way a fleet row states it. */
+const STATUS_RAIL: Record<string, string> = {
+  ok: "border-[var(--color-ok)]",
+  warning: "border-[var(--color-warn)]",
+  critical: "border-[var(--color-critical)]",
+  offline: "border-[var(--color-offline)]",
+};
+
 /** One labeled fact in the host meta row — replaces middle-dot-joined strings
  *  with explicit label/value pairs. See DESIGN.md §6. */
 function MetaField({
@@ -186,10 +195,10 @@ function MetaField({
   value: React.ReactNode;
 }) {
   return (
-    <span className="flex items-center gap-1.5 text-sm">
+    <span className="flex items-center gap-1.5 text-xs">
       <Icon className="h-3.5 w-3.5 text-[var(--color-ink-faint)]" aria-hidden="true" />
       {label && <span className="text-[var(--color-ink-faint)]">{label}</span>}
-      <span className="text-[var(--color-ink-muted)]">{value}</span>
+      <span className="font-mono text-[var(--color-ink-muted)]">{value}</span>
     </span>
   );
 }
@@ -361,106 +370,111 @@ export function ServerDetail() {
 
   return (
     <div>
-      {/* Breadcrumb */}
-      <Link
-        to="/"
-        className="mb-4 inline-flex items-center gap-1.5 text-sm text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-signal)]"
-      >
-        <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-        Dashboard
-      </Link>
+      {/* Host identity band — full-bleed operations chrome: who this host is,
+            what state it is in, and the two actions taken from this page, all
+            above the investigation tabs rather than inside a floating card. */}
+      <div className="bleed-x mb-6 border-b border-[var(--color-line)] bg-[var(--color-void-lift)] pb-4">
+        <Link
+          to="/"
+          className="mb-3 inline-flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-signal)]"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+          Dashboard
+        </Link>
 
-      {/* Header */}
-      <Panel className="mb-6 p-6">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <h2 className="text-2xl font-bold text-[var(--color-ink)]">
-              {agent.hostname || agent.name}
-            </h2>
-            <StatusIndicator status={status} />
-            <TagChips tags={agent.tags ?? []} />
-            {updateAvailable(agent, compareVersion) && (
-              <UpdateAvailableBadge targetVersion={compareVersion} />
-            )}
-            <UpdateStatusChip
-              status={agent.update_status}
-              error={agent.update_error}
-              onRetry={canManage ? () => setShowUpdateModal(true) : undefined}
-            />
+        <div className={`border-l-2 pl-3 ${STATUS_RAIL[status] ?? STATUS_RAIL.offline}`}>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold text-[var(--color-ink)]">
+                {agent.hostname || agent.name}
+              </h1>
+              <StatusIndicator status={status} />
+              <TagChips tags={agent.tags ?? []} />
+              {updateAvailable(agent, compareVersion) && (
+                <UpdateAvailableBadge targetVersion={compareVersion} />
+              )}
+              <UpdateStatusChip
+                status={agent.update_status}
+                error={agent.update_error}
+                onRetry={canManage ? () => setShowUpdateModal(true) : undefined}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {canManage && updateAvailable(agent, compareVersion) && (
+                <Button size="sm" variant="secondary" onClick={() => setShowUpdateModal(true)}>
+                  <ArrowUpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  Update agent
+                </Button>
+              )}
+              {canManage && (
+                <Button size="sm" variant="secondary" onClick={() => setShowSilenceForm(true)}>
+                  <BellOff className="h-3.5 w-3.5" aria-hidden="true" />
+                  Silence this host
+                </Button>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {canManage && updateAvailable(agent, compareVersion) && (
-              <Button size="sm" variant="secondary" onClick={() => setShowUpdateModal(true)}>
-                <ArrowUpCircle className="h-3.5 w-3.5" aria-hidden="true" />
-                Update agent
-              </Button>
-            )}
-            {canManage && (
-              <Button size="sm" variant="secondary" onClick={() => setShowSilenceForm(true)}>
-                <BellOff className="h-3.5 w-3.5" aria-hidden="true" />
-                Silence this host
-              </Button>
-            )}
-          </div>
-        </div>
 
-        {/* Row 1: always shown — from agent record */}
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-          <MetaField icon={Globe} value={agent.ip || "No IP"} />
-          {/* OS/platform: uses PlatformIcon (windows/linux/darwin glyph)
+          {/* Row 1: always shown — from agent record */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+            <MetaField icon={Globe} value={agent.ip || "No IP"} />
+            {/* OS/platform: uses PlatformIcon (windows/linux/darwin glyph)
               instead of MetaField's generic icon slot, matching the same
               glyph shown next to this agent's OS in the Agents table. */}
-          <span className="flex items-center gap-1.5 text-sm">
-            <PlatformIcon platform={agent.platform} />
-            <span className="text-[var(--color-ink-muted)]">
-              {hardware?.platform
-                ? `${hardware.platform}${hardware.platform_version ? ` ${hardware.platform_version}` : ""}`
-                : agent.os || "Unknown OS"}
+            <span className="flex items-center gap-1.5 text-xs">
+              <PlatformIcon platform={agent.platform} />
+              <span className="text-[var(--color-ink-muted)]">
+                {hardware?.platform
+                  ? `${hardware.platform}${hardware.platform_version ? ` ${hardware.platform_version}` : ""}`
+                  : agent.os || "Unknown OS"}
+              </span>
             </span>
-          </span>
-          <MetaField icon={HardDrive} value={`v${agent.version || "0.0.0"}`} />
-          <MetaField
-            icon={Clock}
-            label="Last seen:"
-            value={agent.last_seen ? new Date(agent.last_seen).toLocaleString() : "Never"}
-          />
-        </div>
-
-        {/* Row 2: shown only when hardware data is available */}
-        {hardware && (
-          <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5">
-            {hardware.kernel && <MetaField icon={Server} label="Kernel:" value={hardware.kernel} />}
-            {(hardware.cpu_logical ?? 0) > 0 && (
-              <MetaField
-                icon={Cpu}
-                label="Cores:"
-                value={
-                  hardware.cpu_physical && hardware.cpu_physical !== hardware.cpu_logical
-                    ? `${hardware.cpu_logical} (${hardware.cpu_physical} physical)`
-                    : hardware.cpu_logical
-                }
-              />
-            )}
-            {(hardware.total_ram ?? 0) > 0 && (
-              <MetaField icon={Database} label="RAM:" value={formatBytes(hardware.total_ram!)} />
-            )}
-            {(hardware.uptime ?? 0) > 0 && (
-              <MetaField icon={Activity} label="Uptime:" value={formatUptime(hardware.uptime!)} />
-            )}
-            {hardware.load1 !== undefined && (
-              <MetaField
-                icon={BarChart2}
-                label="Load:"
-                value={`${hardware.load1.toFixed(2)} / ${(hardware.load5 ?? 0).toFixed(2)} / ${(hardware.load15 ?? 0).toFixed(2)}`}
-              />
-            )}
-            {(hardware.procs ?? 0) > 0 && (
-              <MetaField icon={Layers} value={`${hardware.procs} processes`} />
-            )}
-            {hardware.arch && <MetaField icon={Box} label="Arch:" value={hardware.arch} />}
+            <MetaField icon={HardDrive} value={`v${agent.version || "0.0.0"}`} />
+            <MetaField
+              icon={Clock}
+              label="Last seen:"
+              value={agent.last_seen ? new Date(agent.last_seen).toLocaleString() : "Never"}
+            />
           </div>
-        )}
-      </Panel>
+
+          {/* Row 2: shown only when hardware data is available */}
+          {hardware && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-5 gap-y-1">
+              {hardware.kernel && (
+                <MetaField icon={Server} label="Kernel:" value={hardware.kernel} />
+              )}
+              {(hardware.cpu_logical ?? 0) > 0 && (
+                <MetaField
+                  icon={Cpu}
+                  label="Cores:"
+                  value={
+                    hardware.cpu_physical && hardware.cpu_physical !== hardware.cpu_logical
+                      ? `${hardware.cpu_logical} (${hardware.cpu_physical} physical)`
+                      : hardware.cpu_logical
+                  }
+                />
+              )}
+              {(hardware.total_ram ?? 0) > 0 && (
+                <MetaField icon={Database} label="RAM:" value={formatBytes(hardware.total_ram!)} />
+              )}
+              {(hardware.uptime ?? 0) > 0 && (
+                <MetaField icon={Activity} label="Uptime:" value={formatUptime(hardware.uptime!)} />
+              )}
+              {hardware.load1 !== undefined && (
+                <MetaField
+                  icon={BarChart2}
+                  label="Load:"
+                  value={`${hardware.load1.toFixed(2)} / ${(hardware.load5 ?? 0).toFixed(2)} / ${(hardware.load15 ?? 0).toFixed(2)}`}
+                />
+              )}
+              {(hardware.procs ?? 0) > 0 && (
+                <MetaField icon={Layers} value={`${hardware.procs} processes`} />
+              )}
+              {hardware.arch && <MetaField icon={Box} label="Arch:" value={hardware.arch} />}
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Tab bar — full row width so a long tab list (twelve on this page)
           scrolls within itself rather than sharing the row with anything
@@ -480,20 +494,11 @@ export function ServerDetail() {
       {/* Tab content */}
       {activeTab === "metrics" && (
         <div>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="min-h-[1.25rem]">
-              {metricsLoading && (
-                <div className="flex items-center gap-2 text-sm text-[var(--color-ink-muted)]">
-                  <Activity
-                    className="h-4 w-4 animate-pulse text-[var(--color-signal)]"
-                    aria-hidden="true"
-                  />
-                  Refreshing metrics…
-                </div>
-              )}
-            </div>
-            <TimeRangeSelector selected={timeRange} onChange={handleTimeRangeChange} />
-          </div>
+          <SectionHeader
+            title="Resource usage"
+            meta={metricsLoading ? "refreshing…" : undefined}
+            actions={<TimeRangeSelector selected={timeRange} onChange={handleTimeRangeChange} />}
+          />
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <MetricChart

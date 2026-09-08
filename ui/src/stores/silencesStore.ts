@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Silence } from "@/types";
-import pb from "@/lib/pocketbase";
+import pb, { subscribeToCollection } from "@/lib/pocketbase";
 
 interface SilencesState {
   silences: Silence[];
@@ -40,7 +40,7 @@ export const useSilencesStore = create<SilencesState>((set, get) => ({
   },
 
   subscribeToSilences: () => {
-    const unsubscribePromise = pb.collection("silences").subscribe<Silence>("*", (event) => {
+    return subscribeToCollection<Silence>("silences", "*", (event) => {
       const { silences } = get();
       switch (event.action) {
         case "create":
@@ -56,9 +56,5 @@ export const useSilencesStore = create<SilencesState>((set, get) => ({
           break;
       }
     });
-
-    return () => {
-      void unsubscribePromise.then((unsub) => unsub());
-    };
   },
 }));

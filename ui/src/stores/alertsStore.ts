@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Alert, AlertRule } from "@/types";
-import pb from "@/lib/pocketbase";
+import pb, { subscribeToCollection } from "@/lib/pocketbase";
 
 interface AlertsState {
   /** Raw firing alerts and their rules — joined against agents at read time
@@ -53,12 +53,8 @@ export const useAlertsStore = create<AlertsState>((set, get) => ({
     // Any alert create/update/delete can change the firing set — refetch
     // both alerts and rules together rather than hand-patching state, since
     // rule severity can also change independently.
-    const unsubscribePromise = pb.collection("alerts").subscribe<Alert>("*", () => {
+    return subscribeToCollection<Alert>("alerts", "*", () => {
       void get().fetchAlerts();
     });
-
-    return () => {
-      void unsubscribePromise.then((unsub) => unsub());
-    };
   },
 }));

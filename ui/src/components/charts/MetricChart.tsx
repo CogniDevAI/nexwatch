@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { Panel } from "@/components/ui/Panel";
@@ -48,9 +48,14 @@ export function MetricChart({
   const [legendValues, setLegendValues] = useState<(number | null)[]>([]);
 
   const seriesCount = data.length - 1;
-  const labels = Array.from(
-    { length: seriesCount },
-    (_, i) => seriesLabels?.[i] ?? `Series ${i + 1}`,
+  const colorKey = colors.join("\u0000");
+  const labelKey = seriesLabels?.join("\u0000") ?? "";
+
+  const stableColors = useMemo(() => colorKey.split("\u0000"), [colorKey]);
+  const stableSeriesLabels = useMemo(() => (labelKey ? labelKey.split("\u0000") : []), [labelKey]);
+  const labels = useMemo(
+    () => Array.from({ length: seriesCount }, (_, i) => stableSeriesLabels[i] ?? `Series ${i + 1}`),
+    [seriesCount, stableSeriesLabels],
   );
 
   const buildOptions = useCallback(
@@ -59,9 +64,9 @@ export function MetricChart({
         {}, // timestamp series (x-axis)
         ...Array.from({ length: seriesCount }, (_, i) => ({
           label: labels[i],
-          stroke: colors[i % colors.length],
+          stroke: stableColors[i % stableColors.length],
           width: 2,
-          fill: `${colors[i % colors.length]}10`,
+          fill: `${stableColors[i % stableColors.length]}10`,
         })),
       ];
 
@@ -105,7 +110,7 @@ export function MetricChart({
         },
       };
     },
-    [seriesCount, labels, colors, height, unit],
+    [seriesCount, labels, stableColors, height, unit],
   );
 
   // Create/rebuild chart
@@ -142,12 +147,10 @@ export function MetricChart({
     const container = containerRef.current;
     if (!container) return;
 
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const width = entry.contentRect.width;
-        if (chartRef.current && width > 0) {
-          chartRef.current.setSize({ width, height });
-        }
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width ?? 0;
+      if (chartRef.current && width > 0) {
+        chartRef.current.setSize({ width, height });
       }
     });
 
@@ -172,7 +175,7 @@ export function MetricChart({
             >
               <span
                 className="h-2 w-2 flex-shrink-0 rounded-full"
-                style={{ backgroundColor: colors[i % colors.length] }}
+                style={{ backgroundColor: stableColors[i % stableColors.length] }}
                 aria-hidden="true"
               />
               {label}

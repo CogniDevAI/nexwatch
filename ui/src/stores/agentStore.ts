@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Agent } from "@/types";
-import pb from "@/lib/pocketbase";
+import pb, { subscribeToCollection } from "@/lib/pocketbase";
 
 interface AgentState {
   agents: Agent[];
@@ -31,7 +31,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   subscribeToAgents: () => {
-    const unsubscribePromise = pb.collection("agents").subscribe<Agent>("*", (event) => {
+    return subscribeToCollection<Agent>("agents", "*", (event) => {
       const { agents } = get();
 
       switch (event.action) {
@@ -50,10 +50,5 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           break;
       }
     });
-
-    // Return cleanup function
-    return () => {
-      void unsubscribePromise.then((unsub) => unsub());
-    };
   },
 }));

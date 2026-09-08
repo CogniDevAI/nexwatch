@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   LayoutDashboard,
@@ -17,13 +17,17 @@ import {
   ScrollText,
   FileText,
 } from "lucide-react";
+import { onRealtimeStatusChange } from "@/lib/pocketbase";
 import { useAuthStore } from "@/stores/authStore";
 import { useAgentStore } from "@/stores/agentStore";
 import { useAlertsStore } from "@/stores/alertsStore";
 import { useSilencesStore } from "@/stores/silencesStore";
 import { useChecksStore } from "@/stores/checksStore";
 import { useActiveAlerts } from "@/hooks/useActiveAlerts";
+import { useFleetHealth } from "@/hooks/useFleetHealth";
 import { useSilences, silenceBucket } from "@/hooks/useSilences";
+import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import type { Status } from "@/components/ui/status";
 import { Wordmark, LogoMark } from "@/components/ui/Logo";
 import { SignalRail } from "@/components/layout/SignalRail";
 import { OfflineBanner } from "@/components/layout/OfflineBanner";
@@ -41,10 +45,35 @@ interface NavItem {
   count?: number;
 }
 
+interface NavGroup {
+  heading: string;
+  items: NavItem[];
+}
+
 /** Small neutral count chip for a nav item — never a status color, since
  *  the count itself isn't a severity signal (the item's own icon and the
  *  page it links to already carry that). Kept deliberately quiet: same
  *  muted tone regardless of how large the count gets. */
+/** One posture reading in the top context bar: glyph + count + plain-language
+ *  noun, so the bar answers "how many, of what" without a legend. */
+function PostureReading({
+  status,
+  count,
+  label,
+}: {
+  status: Status;
+  count: number;
+  label: string;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <StatusIndicator status={status} dotOnly />
+      <span className="font-mono text-xs text-[var(--color-ink)] tabular-nums">{count}</span>
+      <span className="text-xs text-[var(--color-ink-muted)]">{label}</span>
+    </span>
+  );
+}
+
 function NavCountBadge({ count }: { count: number }) {
   return (
     <span className="text-2xs ml-auto rounded-[var(--radius-chip)] bg-[var(--color-panel-raised)] px-1.5 py-0.5 font-medium text-[var(--color-ink-muted)] tabular-nums">
@@ -53,25 +82,49 @@ function NavCountBadge({ count }: { count: number }) {
   );
 }
 
-const baseNavItems: NavItem[] = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/agents", label: "Agents", icon: Server },
-  { to: "/checks", label: "Checks", icon: Radio },
-  { to: "/logs", label: "Logs", icon: FileText },
-  { to: "/alerts", label: "Alert rules", icon: Bell },
-  { to: "/alerts/history", label: "Alert history", icon: BellRing },
-  { to: "/alerts/silences", label: "Silences", icon: BellOff },
+const baseNavGroups: NavGroup[] = [
   {
-    to: "/settings",
-    label: "Settings",
-    icon: SettingsIcon,
-    end: true,
-    children: [{ to: "/settings/notifications", label: "Notifications", icon: MessageSquare }],
+    heading: "Now",
+    items: [{ to: "/", label: "Operations", icon: LayoutDashboard, end: true }],
+  },
+  {
+    heading: "Fleet",
+    items: [
+      { to: "/agents", label: "Agents", icon: Server },
+      { to: "/checks", label: "Checks", icon: Radio },
+    ],
+  },
+  {
+    heading: "Signals",
+    items: [
+      { to: "/alerts/history", label: "Alert history", icon: BellRing },
+      { to: "/logs", label: "Logs", icon: FileText },
+    ],
+  },
+  {
+    heading: "Response",
+    items: [
+      { to: "/alerts", label: "Alert rules", icon: Bell },
+      { to: "/alerts/silences", label: "Silences", icon: BellOff },
+    ],
+  },
+  {
+    heading: "Admin",
+    items: [
+      {
+        to: "/settings",
+        label: "Settings",
+        icon: SettingsIcon,
+        end: true,
+        children: [{ to: "/settings/notifications", label: "Notifications", icon: MessageSquare }],
+      },
+    ],
   },
 ];
 
 export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [realtimeIssueCount, setRealtimeIssueCount] = useState(0);
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
   const hasRole = useAuthStore((s) => s.hasRole);
@@ -83,7 +136,19 @@ export function AppShell() {
   // extra requests. See DESIGN.md §10.
   const { alerts: firingAlerts } = useActiveAlerts();
   const { silences } = useSilences();
+  const { fleet } = useFleetHealth();
   const activeSilenceCount = silences.filter((s) => silenceBucket(s) === "active").length;
+
+  const posture = {
+    ok: fleet.filter((a) => a.status === "ok").length,
+    warning: fleet.filter((a) => a.status === "warning").length,
+    critical: fleet.filter((a) => a.status === "critical").length,
+    offline: fleet.filter((a) => a.status === "offline").length,
+  };
+
+  useEffect(() => {
+    return onRealtimeStatusChange((issues) => setRealtimeIssueCount(issues.length));
+  }, []);
 
   // Single owner of the agents/alerts fetch + realtime subscription for the
   // whole authenticated session. AppShell mounts exactly once per session
@@ -151,24 +216,27 @@ export function AppShell() {
   // rather than sitting as top-level items (see DESIGN.md §3). Audit log
   // matches its collection's own read rule (operator or admin — see the
   // "audit_log" migration); Users stays admin-only.
-  const items: NavItem[] = baseNavItems.map((item) => {
-    if (item.to === "/alerts/history") {
-      return { ...item, count: firingAlerts.length };
-    }
-    if (item.to === "/alerts/silences") {
-      return { ...item, count: activeSilenceCount };
-    }
-    if (item.to !== "/settings") return item;
+  const groups: NavGroup[] = baseNavGroups.map((group) => ({
+    ...group,
+    items: group.items.map((item) => {
+      if (item.to === "/alerts/history") {
+        return { ...item, count: firingAlerts.length };
+      }
+      if (item.to === "/alerts/silences") {
+        return { ...item, count: activeSilenceCount };
+      }
+      if (item.to !== "/settings") return item;
 
-    const children = [...(item.children ?? [])];
-    if (hasRole("operator")) {
-      children.push({ to: "/settings/audit", label: "Audit log", icon: ScrollText });
-    }
-    if (hasRole("admin")) {
-      children.push({ to: "/settings/users", label: "Users", icon: Users });
-    }
-    return { ...item, children };
-  });
+      const children = [...(item.children ?? [])];
+      if (hasRole("operator")) {
+        children.push({ to: "/settings/audit", label: "Audit log", icon: ScrollText });
+      }
+      if (hasRole("admin")) {
+        children.push({ to: "/settings/users", label: "Users", icon: Users });
+      }
+      return { ...item, children };
+    }),
+  }));
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[var(--color-void)]">
@@ -176,6 +244,12 @@ export function AppShell() {
           visible from every page since they render here rather than per-page. */}
       <OfflineBanner />
       <UpdateAvailableToast />
+      {realtimeIssueCount > 0 && (
+        <div className="border-b border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-4 py-2 text-center text-xs text-[var(--color-warn)]">
+          Live updates degraded for {realtimeIssueCount} stream
+          {realtimeIssueCount === 1 ? "" : "s"}. Polling and manual refresh remain available.
+        </div>
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         {/* Mobile overlay */}
@@ -191,12 +265,12 @@ export function AppShell() {
         {/* Sidebar */}
         <aside
           ref={asideRef}
-          className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-shrink-0 transform flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)] transition-transform duration-200 ease-in-out lg:relative lg:translate-x-0 ${
+          className={`fixed inset-y-0 left-0 z-50 flex w-60 flex-shrink-0 transform flex-col border-r border-[var(--color-line)] bg-[var(--color-void-lift)] transition-transform duration-200 ease-in-out lg:relative lg:translate-x-0 ${
             sidebarOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
           {/* Logo */}
-          <div className="flex h-16 flex-shrink-0 items-center justify-between border-b border-[var(--color-line)] px-5">
+          <div className="flex h-14 flex-shrink-0 items-center justify-between border-b border-[var(--color-line)] px-4">
             <Wordmark />
             <button
               onClick={() => setSidebarOpen(false)}
@@ -208,48 +282,63 @@ export function AppShell() {
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-            {items.map((item) => (
-              <div key={item.to}>
-                <NavLink
-                  to={item.to}
-                  end={item.end}
-                  onClick={() => setSidebarOpen(false)}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 rounded-[var(--radius-control)] px-3 py-2.5 text-sm font-medium transition-colors ${
-                      isActive
-                        ? "bg-[var(--color-signal)]/12 text-[var(--color-signal)]"
-                        : "text-[var(--color-ink-muted)] hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]"
-                    }`
-                  }
+          <nav
+            className="flex-1 space-y-4 overflow-y-auto px-2 py-4"
+            aria-label="Operator workflow"
+          >
+            {groups.map((group) => (
+              <section key={group.heading} aria-labelledby={`nav-${group.heading.toLowerCase()}`}>
+                <h2
+                  id={`nav-${group.heading.toLowerCase()}`}
+                  className="text-2xs px-3 pb-1.5 font-medium text-[var(--color-ink-faint)]"
                 >
-                  <item.icon className="h-[18px] w-[18px]" aria-hidden="true" />
-                  <span>{item.label}</span>
-                  {!!item.count && <NavCountBadge count={item.count} />}
-                </NavLink>
-
-                {item.children && (
-                  <div className="mt-1 mb-1 ml-4 space-y-1 border-l border-[var(--color-line)] pl-3">
-                    {item.children.map((child) => (
+                  {group.heading}
+                </h2>
+                <div className="space-y-1">
+                  {group.items.map((item) => (
+                    <div key={item.to}>
                       <NavLink
-                        key={child.to}
-                        to={child.to}
+                        to={item.to}
+                        end={item.end}
                         onClick={() => setSidebarOpen(false)}
                         className={({ isActive }) =>
-                          `flex items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 py-2 text-xs font-medium transition-colors ${
+                          `flex items-center gap-2.5 border-l-2 px-3 py-2 text-sm transition-colors ${
                             isActive
-                              ? "bg-[var(--color-signal)]/12 text-[var(--color-signal)]"
-                              : "text-[var(--color-ink-faint)] hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]"
+                              ? "border-[var(--color-signal)] bg-[var(--color-signal)]/10 font-medium text-[var(--color-signal)]"
+                              : "border-transparent text-[var(--color-ink-muted)] hover:bg-[var(--color-panel)] hover:text-[var(--color-ink)]"
                           }`
                         }
                       >
-                        <child.icon className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>{child.label}</span>
+                        <item.icon className="h-[18px] w-[18px]" aria-hidden="true" />
+                        <span>{item.label}</span>
+                        {!!item.count && <NavCountBadge count={item.count} />}
                       </NavLink>
-                    ))}
-                  </div>
-                )}
-              </div>
+
+                      {item.children && (
+                        <div className="mt-0.5 mb-0.5 ml-6 space-y-0.5 border-l border-[var(--color-line)] pl-2">
+                          {item.children.map((child) => (
+                            <NavLink
+                              key={child.to}
+                              to={child.to}
+                              onClick={() => setSidebarOpen(false)}
+                              className={({ isActive }) =>
+                                `flex items-center gap-2.5 px-2.5 py-1.5 text-xs transition-colors ${
+                                  isActive
+                                    ? "font-medium text-[var(--color-signal)]"
+                                    : "text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
+                                }`
+                              }
+                            >
+                              <child.icon className="h-3.5 w-3.5" aria-hidden="true" />
+                              <span>{child.label}</span>
+                            </NavLink>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
             ))}
           </nav>
 
@@ -279,24 +368,64 @@ export function AppShell() {
 
         {/* Main Content */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Mobile header */}
-          <header className="flex h-16 flex-shrink-0 items-center border-b border-[var(--color-line)] bg-[var(--color-panel)] px-4 lg:hidden">
+          {/* Context bar — the operations frame around every page: how to get
+                back to the nav on a phone, what the fleet currently looks like,
+                and whether anything is firing. All of it reads the same stores
+                this shell already owns, so it costs no extra request (§10). */}
+          <header className="flex h-14 flex-shrink-0 items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-void-lift)] px-4">
             <button
               ref={menuButtonRef}
               onClick={() => setSidebarOpen(true)}
               aria-label="Open sidebar"
-              className="-ml-2 rounded-[var(--radius-control)] p-2 text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]"
+              className="-ml-2 rounded-[var(--radius-control)] p-2 text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-panel)] hover:text-[var(--color-ink)] lg:hidden"
             >
               <Menu className="h-5 w-5" />
             </button>
-            <div className="ml-3 flex items-center gap-2">
+            <div className="flex items-center gap-2 lg:hidden">
               <LogoMark className="h-5 w-5" />
               <span className="text-base font-semibold text-[var(--color-ink)]">NexWatch</span>
+            </div>
+
+            {fleet.length > 0 && (
+              <div
+                className="hidden items-center gap-5 sm:flex"
+                aria-label={`Fleet posture: ${fleet.length} agents`}
+              >
+                <PostureReading status="ok" count={posture.ok} label="operational" />
+                {posture.warning > 0 && (
+                  <PostureReading status="warning" count={posture.warning} label="warning" />
+                )}
+                {posture.critical > 0 && (
+                  <PostureReading status="critical" count={posture.critical} label="critical" />
+                )}
+                {posture.offline > 0 && (
+                  <PostureReading status="offline" count={posture.offline} label="offline" />
+                )}
+              </div>
+            )}
+
+            <div className="ml-auto flex items-center gap-4">
+              {firingAlerts.length > 0 ? (
+                <Link
+                  to="/alerts/history"
+                  className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-critical)] hover:underline"
+                >
+                  <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
+                  {firingAlerts.length} firing
+                </Link>
+              ) : (
+                <span className="hidden text-xs text-[var(--color-ink-faint)] sm:inline">
+                  No firing alerts
+                </span>
+              )}
+              <span className="text-2xs hidden font-mono text-[var(--color-ink-faint)] md:inline">
+                {realtimeIssueCount > 0 ? "Live updates degraded" : "Live"}
+              </span>
             </div>
           </header>
 
           <main className="flex-1 overflow-auto bg-[var(--color-void)]">
-            <div className="mx-auto max-w-7xl p-4 sm:p-6">
+            <div className="mx-auto max-w-[1600px] p-4 sm:p-6">
               <Outlet />
             </div>
           </main>

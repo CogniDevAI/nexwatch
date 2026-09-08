@@ -13,10 +13,13 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-info()    { echo -e "${CYAN}[INFO]${NC} $1"; }
+info() { echo -e "${CYAN}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    exit 1
+}
 
 REPO="CogniDevAI/nexwatch"
 DEPLOY_DIR="/opt/nexwatch"
@@ -34,19 +37,19 @@ fi
 # ── Install Docker ─────────────────────────────────────────────────────────────
 info "Checking Docker..."
 
-if ! command -v docker > /dev/null 2>&1; then
+if ! command -v docker >/dev/null 2>&1; then
     info "Installing Docker..."
 
-    if command -v apt-get > /dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
         apt-get update -qq
         apt-get install -y -qq curl git
         curl -fsSL https://get.docker.com | sh
 
-    elif command -v dnf > /dev/null 2>&1; then
+    elif command -v dnf >/dev/null 2>&1; then
         dnf install -y curl git
         curl -fsSL https://get.docker.com | sh
 
-    elif command -v yum > /dev/null 2>&1; then
+    elif command -v yum >/dev/null 2>&1; then
         yum install -y curl git
         curl -fsSL https://get.docker.com | sh
 
@@ -61,9 +64,9 @@ else
 fi
 
 # ── Install git if missing ─────────────────────────────────────────────────────
-if ! command -v git > /dev/null 2>&1; then
-    command -v dnf > /dev/null 2>&1 && dnf install -y git
-    command -v apt-get > /dev/null 2>&1 && apt-get install -y -qq git
+if ! command -v git >/dev/null 2>&1; then
+    command -v dnf >/dev/null 2>&1 && dnf install -y git
+    command -v apt-get >/dev/null 2>&1 && apt-get install -y -qq git
 fi
 
 # ── Clone or update repo ───────────────────────────────────────────────────────
@@ -98,9 +101,9 @@ fi
 # Load env — parse manually to avoid issues with comments on AlmaLinux/bash
 while IFS='=' read -r key value; do
     # Skip empty lines and comments
-    case "$key" in ''|\#*) continue ;; esac
+    case "$key" in '' | \#*) continue ;; esac
     export "$key=$value"
-done < .env
+done <.env
 
 # ── Build image and start ──────────────────────────────────────────────────────
 info "Building NexWatch Hub image (this takes ~2-3 minutes the first time)..."
@@ -111,12 +114,19 @@ docker compose -f docker-compose.prod.yml up -d
 
 # ── Wait for hub ───────────────────────────────────────────────────────────────
 info "Waiting for hub to start..."
+HUB_READY=0
 for i in $(seq 1 15); do
-    if curl -sf "http://localhost:${HUB_PORT:-8090}/api/health" > /dev/null 2>&1; then
+    if curl -sf "http://localhost:${HUB_PORT:-8090}/healthz" >/dev/null 2>&1; then
+        HUB_READY=1
         break
     fi
     sleep 2
 done
+
+if [ "$HUB_READY" -ne 1 ]; then
+    docker compose -f docker-compose.prod.yml ps || true
+    error "NexWatch Hub did not become ready at /healthz on port ${HUB_PORT:-8090} after 30 seconds. Check logs: cd ${DEPLOY_DIR}/deploy && make logs"
+fi
 
 success "NexWatch Hub is running on port ${HUB_PORT:-8090}!"
 echo ""

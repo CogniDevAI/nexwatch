@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Check } from "@/types";
-import pb from "@/lib/pocketbase";
+import pb, { subscribeToCollection } from "@/lib/pocketbase";
 
 interface ChecksState {
   checks: Check[];
@@ -39,7 +39,7 @@ export const useChecksStore = create<ChecksState>((set, get) => ({
   },
 
   subscribeToChecks: () => {
-    const unsubscribePromise = pb.collection("checks").subscribe<Check>("*", (event) => {
+    return subscribeToCollection<Check>("checks", "*", (event) => {
       const { checks } = get();
       switch (event.action) {
         case "create":
@@ -55,9 +55,5 @@ export const useChecksStore = create<ChecksState>((set, get) => ({
           break;
       }
     });
-
-    return () => {
-      void unsubscribePromise.then((unsub) => unsub());
-    };
   },
 }));

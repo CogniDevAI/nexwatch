@@ -24,6 +24,7 @@ import { FleetStrip } from "@/components/ui/FleetStrip";
 import { Table, Th, Td } from "@/components/ui/Table";
 import { rowClass } from "@/components/ui/rowClass";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import type { Status } from "@/components/ui/status";
 import { PlatformIcon } from "@/components/ui/PlatformIcon";
 import { Tabs } from "@/components/ui/Tabs";
 import { Modal } from "@/components/ui/Modal";
@@ -43,6 +44,17 @@ import type { TabItem } from "@/components/ui/Tabs";
 
 type InstallOS = "linux" | "windows";
 
+/** Left status rail on a fleet row — the same status the row's glyph carries,
+ *  repeated on the left edge so a vertical scan finds the bad host first.
+ *  Applied to the row's first cell, since a collapsed table's <tr> border is
+ *  not reliably painted. See DESIGN.md §3. */
+const STATUS_RAIL: Record<Status, string> = {
+  ok: "border-l-2 border-[var(--color-ok)]",
+  warning: "border-l-2 border-[var(--color-warn)]",
+  critical: "border-l-2 border-[var(--color-critical)]",
+  offline: "border-l-2 border-[var(--color-offline)]",
+};
+
 // Thin per-OS wrappers so PlatformIcon (which takes a "platform" prop, not
 // just "className") fits Tabs' generic `icon: ComponentType<{className}>`
 // shape.
@@ -57,6 +69,15 @@ const OS_TABS: TabItem<InstallOS>[] = [
   { key: "linux", label: "Linux", icon: LinuxTabIcon },
   { key: "windows", label: "Windows", icon: WindowsTabIcon },
 ];
+
+function agentHubWsUrl(): string {
+  try {
+    const hubUrl = new URL(pb.baseUrl);
+    return `${hubUrl.protocol === "https:" ? "wss" : "ws"}://${hubUrl.host}/ws/agent`;
+  } catch {
+    return "/ws/agent";
+  }
+}
 
 interface AgentActionsProps {
   agent: Agent;
@@ -316,9 +337,8 @@ export function Agents() {
     setInstallOS("linux");
   };
 
-  // Build hub WebSocket URL from current page location.
-  // http → ws, https → wss
-  const hubWsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/agent`;
+  // Build hub WebSocket URL from the PocketBase hub endpoint, not the UI host.
+  const hubWsUrl = agentHubWsUrl();
 
   const installCommand = newAgent
     ? `curl -fsSL https://raw.githubusercontent.com/CogniDevAI/nexwatch/main/scripts/install-agent.sh | bash -s -- --hub ${hubWsUrl} --token ${newAgent.token}`
@@ -342,6 +362,27 @@ export function Agents() {
     <div>
       <PageHeader
         title="Agents"
+        description="Every host reporting to this hub, its build, and its update state."
+        meta={
+          agents.length > 0 ? (
+            <>
+              <span className="flex items-baseline gap-2">
+                <span className="text-[var(--color-ink-faint)]">Registered</span>
+                <span className="font-mono font-medium text-[var(--color-ink)] tabular-nums">
+                  {agents.length}
+                </span>
+              </span>
+              {outdatedAgents.length > 0 && (
+                <span className="flex items-baseline gap-2">
+                  <span className="text-[var(--color-ink-faint)]">Outdated</span>
+                  <span className="font-mono font-medium text-[var(--color-warn)] tabular-nums">
+                    {outdatedAgents.length}
+                  </span>
+                </span>
+              )}
+            </>
+          ) : undefined
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {canManageAll && outdatedAgents.length > 0 && (
@@ -370,17 +411,18 @@ export function Agents() {
           once we know there are zero agents, so the message below isn't
           duplicated. Scoped by the tag filter below, same as Dashboard. */}
       {(loading || (!error && agents.length > 0)) && (
-        <Panel className="mb-6 p-5">
+        <div className="bleed-x mb-8 border-b border-[var(--color-line)] bg-[var(--color-void-lift)] pb-4">
           {loading && agents.length === 0 ? (
-            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-10 w-full" />
           ) : (
-            <FleetStrip agents={filteredFleet} size="lg" />
+            <>
+              {allTags.length > 0 && (
+                <TagFilterBar tags={allTags} selected={selectedTags} onToggle={toggleTag} />
+              )}
+              <FleetStrip agents={filteredFleet} size="lg" />
+            </>
           )}
-        </Panel>
-      )}
-
-      {!loading && !error && agents.length > 0 && (
-        <TagFilterBar tags={allTags} selected={selectedTags} onToggle={toggleTag} />
+        </div>
       )}
 
       {/* Agents Table (desktop) / Cards (mobile) */}
@@ -422,7 +464,7 @@ export function Agents() {
         <>
           {/* Desktop table */}
           <div className="hidden md:block">
-            <Table>
+            <Table variant="flush">
               <thead>
                 <tr className="border-b border-[var(--color-line)]">
                   <Th>Status</Th>
@@ -440,7 +482,7 @@ export function Agents() {
               <tbody className="divide-y divide-[var(--color-line-soft)]">
                 {filteredAgents.map((agent, idx) => (
                   <tr key={agent.id} className={rowClass(idx)}>
-                    <Td>
+                    <Td className={STATUS_RAIL[statusByAgentId.get(agent.id) ?? "offline"]}>
                       <StatusIndicator status={statusByAgentId.get(agent.id) ?? "offline"} />
                     </Td>
                     <Td className="font-medium">{agent.hostname || agent.name || "Pending…"}</Td>
@@ -512,7 +554,10 @@ export function Agents() {
           {/* Mobile cards */}
           <div className="space-y-3 md:hidden">
             {filteredAgents.map((agent) => (
-              <Panel key={agent.id}>
+              <Panel
+                key={agent.id}
+                className={STATUS_RAIL[statusByAgentId.get(agent.id) ?? "offline"]}
+              >
                 <PanelBody className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-medium text-[var(--color-ink)]">

@@ -1,17 +1,18 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { Server } from "lucide-react";
+import { Radio, Server, ShieldCheck } from "lucide-react";
 import { useAgentStore } from "@/stores/agentStore";
 import { useChecksStore } from "@/stores/checksStore";
 import { useAuthStore } from "@/stores/authStore";
 import { apiFetch } from "@/lib/api";
 import { timeSince } from "@/lib/time";
 import { checkStatus } from "@/lib/checks";
-import { ServerCard, type AgentMetricsSummary } from "@/components/dashboard/ServerCard";
+import type { AgentMetricsSummary } from "@/components/dashboard/ServerCard";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Panel, PanelHeader } from "@/components/ui/Panel";
+import { Panel, Section, SectionHeader } from "@/components/ui/Panel";
 import { FleetStrip } from "@/components/ui/FleetStrip";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
+import type { Status } from "@/components/ui/status";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Button } from "@/components/ui/Button";
@@ -27,6 +28,90 @@ interface DashboardSummary {
   agents: Record<string, AgentMetricsSummary>;
 }
 
+const statusRank: Record<Status, number> = {
+  critical: 0,
+  warning: 1,
+  offline: 2,
+  ok: 3,
+};
+
+/** Left status rail on an operator row — the same status the row's glyph
+ *  carries, repeated on the left edge so a vertical scan finds the bad row
+ *  before any text is read. See DESIGN.md §3. */
+const STATUS_RAIL: Record<Status, string> = {
+  ok: "border-[var(--color-ok)]",
+  warning: "border-[var(--color-warn)]",
+  critical: "border-[var(--color-critical)]",
+  offline: "border-[var(--color-offline)]",
+};
+
+const TONE_CLASS = {
+  ok: "text-[var(--color-ok)]",
+  warn: "text-[var(--color-warn)]",
+  critical: "text-[var(--color-critical)]",
+  muted: "text-[var(--color-ink)]",
+} as const;
+
+/** One compact contextual reading in the page header's meta line — deliberately
+ *  not a KPI card: four equal-weight boxes would claim these numbers matter as
+ *  much as the incident list they sit above. See DESIGN.md §3. */
+function MetaStat({
+  label,
+  value,
+  detail,
+  tone = "muted",
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  tone?: keyof typeof TONE_CLASS;
+}) {
+  return (
+    <span className="flex items-baseline gap-2">
+      <span className="text-[var(--color-ink-faint)]">{label}</span>
+      <span className={`font-mono font-medium tabular-nums ${TONE_CLASS[tone]}`}>{value}</span>
+      {detail && <span className="text-[var(--color-ink-faint)]">{detail}</span>}
+    </span>
+  );
+}
+
+/** Resource pressure as a labeled number plus a proportional bar — the bar is
+ *  the part a 3 a.m. glance actually reads. Renders a plain "--" when the agent
+ *  has not reported that metric; never a zeroed bar, which would read as idle. */
+function MetricCell({ label, value }: { label: string; value?: number }) {
+  if (value === undefined) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs">
+        <span className="w-8 text-[var(--color-ink-faint)]">{label}</span>
+        <span className="font-mono text-[var(--color-ink-faint)]">--</span>
+      </span>
+    );
+  }
+
+  const clamped = Math.min(Math.max(value, 0), 100);
+  const tone =
+    clamped >= 90
+      ? { text: "text-[var(--color-critical)]", bar: "bg-[var(--color-critical)]" }
+      : clamped >= 75
+        ? { text: "text-[var(--color-warn)]", bar: "bg-[var(--color-warn)]" }
+        : { text: "text-[var(--color-ink)]", bar: "bg-[var(--color-signal-muted)]" };
+
+  return (
+    <span className="flex items-center gap-1.5 text-xs">
+      <span className="w-8 text-[var(--color-ink-faint)]">{label}</span>
+      <span className={`w-9 text-right font-mono tabular-nums ${tone.text}`}>
+        {clamped.toFixed(0)}%
+      </span>
+      <span
+        className="hidden h-1 min-w-8 flex-1 bg-[var(--color-line)] sm:block"
+        aria-hidden="true"
+      >
+        <span className={`block h-full ${tone.bar}`} style={{ width: `${clamped}%` }} />
+      </span>
+    </span>
+  );
+}
+
 export function Dashboard() {
   usePageTitle("Dashboard");
 
@@ -34,7 +119,11 @@ export function Dashboard() {
   // reads the shared stores. See DESIGN.md §10.
   const { agents, loading, error, fetchAgents } = useAgentStore();
   const { checks } = useChecksStore();
-  const { summary: checksSummary } = useChecksSummary();
+  const {
+    summary: checksSummary,
+    loading: checksSummaryLoading,
+    error: checksSummaryError,
+  } = useChecksSummary();
   const canManage = useAuthStore((s) => s.hasRole("operator"));
   const [metricsSummary, setMetricsSummary] = useState<Record<string, AgentMetricsSummary>>({});
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
@@ -47,9 +136,6 @@ export function Dashboard() {
     refetchActiveAlerts,
   } = useFleetHealth();
 
-  // Checks needing attention: down, or a certificate expiring soon —
-  // surfaced here so an incident doesn't require a separate trip to
-  // /checks just to notice it exists.
   const problemChecks = useMemo(
     () => checksSummary.filter((c) => c.status === "down" || c.cert_expiring_soon),
     [checksSummary],
@@ -69,10 +155,6 @@ export function Dashboard() {
     });
   };
 
-  // Agents with ANY of the selected tags — an empty selection shows everyone.
-  // The FleetStrip hero is scoped by the same filter so the health strip
-  // answers "which one is unhealthy" for the tags currently in view, not the
-  // whole fleet, once a filter is active.
   const filteredAgents = useMemo(
     () =>
       selectedTags.size === 0
@@ -89,6 +171,19 @@ export function Dashboard() {
     [fleet, filteredAgentIds],
   );
 
+  const sortedFilteredAgents = useMemo(
+    () =>
+      [...filteredAgents].sort((a, b) => {
+        const aStatus = statusByAgentId.get(a.id) ?? "offline";
+        const bStatus = statusByAgentId.get(b.id) ?? "offline";
+        return (
+          statusRank[aStatus] - statusRank[bStatus] ||
+          (a.hostname || a.name).localeCompare(b.hostname || b.name)
+        );
+      }),
+    [filteredAgents, statusByAgentId],
+  );
+
   const fetchDashboardSummary = useCallback(async () => {
     try {
       const response = await apiFetch("/api/custom/dashboard");
@@ -97,31 +192,69 @@ export function Dashboard() {
         setMetricsSummary(data.agents ?? {});
       }
     } catch {
-      // Dashboard API might not be available yet
+      // Dashboard API might not be available yet.
     }
   }, []);
 
   useEffect(() => {
     void fetchDashboardSummary();
-    // Refresh metrics summary every 10 seconds (matches agent collection interval)
     const interval = setInterval(fetchDashboardSummary, 10_000);
     return () => clearInterval(interval);
   }, [fetchDashboardSummary]);
 
+  const onlineCount = fleet.filter((a) => a.status !== "offline").length;
+  const offlineCount = fleet.filter((a) => a.status === "offline").length;
   const criticalCount = activeAlerts.filter((a) => a.severity === "critical").length;
   const warningCount = activeAlerts.filter((a) => a.severity === "warning").length;
+  const downCheckCount = checksSummary.filter((c) => c.status === "down").length;
+  const configuredCheckCount = checksSummary.length || checks.length;
+  const incidentCount = activeAlerts.length + problemChecks.length;
 
   return (
     <div>
-      <PageHeader title="Dashboard" description="Every connected server, at a glance." />
+      <PageHeader
+        title="Operations"
+        description="Current fleet posture, alerts, and checks for the NexWatch Hub."
+        meta={
+          <>
+            <MetaStat
+              label="Agents"
+              value={`${onlineCount}/${agents.length}`}
+              detail={offlineCount > 0 ? `online, ${offlineCount} offline` : "online"}
+              tone={offlineCount > 0 ? "critical" : "ok"}
+            />
+            <MetaStat
+              label="Active alerts"
+              value={`${activeAlerts.length}`}
+              detail={
+                activeAlerts.length > 0
+                  ? `${criticalCount} critical, ${warningCount} warning`
+                  : undefined
+              }
+              tone={criticalCount > 0 ? "critical" : warningCount > 0 ? "warn" : "muted"}
+            />
+            <MetaStat
+              label="Checks"
+              value={`${configuredCheckCount}`}
+              detail={
+                checksSummaryLoading
+                  ? "loading status"
+                  : downCheckCount > 0
+                    ? `configured, ${downCheckCount} down`
+                    : "configured, all up"
+              }
+              tone={downCheckCount > 0 ? "critical" : "muted"}
+            />
+          </>
+        }
+      />
 
-      {/* Fleet health — the hero: one tick per agent, real status, click-through.
-          Skipped once we know there are zero agents, so that message isn't
-          shown twice alongside the EmptyState below. */}
+      {/* Fleet posture band — full-bleed chrome directly under the page header,
+          so the first thing on the page is the fleet itself, not a card. */}
       {(loading || error || agents.length > 0) && (
-        <Panel className="mb-6 p-5">
+        <div className="bleed-x mb-8 border-b border-[var(--color-line)] bg-[var(--color-void-lift)] pb-4">
           {loading && agents.length === 0 ? (
-            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-10 w-full" />
           ) : error ? (
             <ErrorState
               title="Couldn't load agents"
@@ -134,19 +267,24 @@ export function Dashboard() {
             />
           ) : (
             <>
-              <FleetStrip agents={filteredFleet} size="lg" />
-              {!activeAlertsLoading && !activeAlertsError && activeAlerts.length === 0 && (
-                <p className="mt-4 text-sm text-[var(--color-ink-faint)]">No active alerts</p>
+              {allTags.length > 0 && (
+                <TagFilterBar tags={allTags} selected={selectedTags} onToggle={toggleTag} />
               )}
+              <FleetStrip agents={filteredFleet} size="lg" />
             </>
           )}
-        </Panel>
+        </div>
       )}
 
-      {/* Active alerts — incident visibility, between the health strip and the grid.
-          Only relevant once there's at least one agent to alert on. */}
-      {agents.length === 0 ? null : activeAlertsError ? (
-        <Panel className="mb-8">
+      <Section aria-labelledby="attention-heading">
+        <SectionHeader
+          id="attention-heading"
+          title="Attention"
+          description="Active alerts and failing checks, worst first."
+          meta={incidentCount > 0 ? `${incidentCount} open` : "clear"}
+        />
+
+        {activeAlertsError ? (
           <ErrorState
             title="Couldn't load active alerts"
             description={activeAlertsError}
@@ -156,150 +294,202 @@ export function Dashboard() {
               </Button>
             }
           />
-        </Panel>
-      ) : activeAlertsLoading && activeAlerts.length === 0 ? (
-        <Panel className="mb-8 p-5">
-          <Skeleton className="h-16 w-full" />
-        </Panel>
-      ) : activeAlerts.length > 0 ? (
-        <Panel className="mb-8">
-          <PanelHeader
-            title="Active alerts"
-            actions={
-              <div className="flex items-center gap-2">
-                {criticalCount > 0 && (
-                  <StatusIndicator status="critical" label={`${criticalCount} critical`} />
-                )}
-                {warningCount > 0 && (
-                  <StatusIndicator status="warning" label={`${warningCount} warning`} />
-                )}
-              </div>
-            }
-          />
+        ) : activeAlertsLoading && activeAlerts.length === 0 ? (
+          <Skeleton className="h-24 w-full" />
+        ) : incidentCount === 0 ? (
+          <div className="flex items-center gap-3 border-l-2 border-[var(--color-ok)] bg-[var(--color-panel)]/40 px-4 py-4 text-sm text-[var(--color-ink-muted)]">
+            <ShieldCheck className="h-4 w-4 text-[var(--color-ok)]" aria-hidden="true" />
+            No active alerts or failing checks.
+          </div>
+        ) : (
           <div className="divide-y divide-[var(--color-line-soft)]">
-            {activeAlerts.slice(0, 5).map((alert) => (
+            {activeAlerts.slice(0, 6).map((alert) => (
               <div
-                key={alert.id}
-                className="flex flex-wrap items-center gap-3 px-5 py-3 sm:flex-nowrap sm:gap-4"
+                key={`alert-${alert.id}`}
+                className={`grid gap-3 border-l-2 px-4 py-2.5 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center ${STATUS_RAIL[alert.severity]}`}
               >
                 <StatusIndicator status={alert.severity} dotOnly />
                 <Link
                   to={alert.checkId ? "/checks" : `/servers/${alert.agentId}`}
-                  className="min-w-0 flex-1 rounded-[var(--radius-control)] transition-colors hover:bg-[var(--color-panel-raised)]"
+                  className="min-w-0 transition-colors hover:text-[var(--color-signal)]"
                 >
-                  <p className="flex items-center gap-1.5 truncate text-sm font-medium text-[var(--color-ink)]">
+                  <p className="truncate text-sm font-medium text-[var(--color-ink)]">
                     {alert.ruleName}
                     {alert.count > 1 && (
-                      <span className="text-2xs rounded-[var(--radius-chip)] bg-[var(--color-panel-raised)] px-1.5 py-0.5 font-mono text-[var(--color-ink-faint)] tabular-nums">
+                      <span className="text-2xs ml-2 rounded-[var(--radius-chip)] bg-[var(--color-panel-raised)] px-1.5 py-0.5 font-mono text-[var(--color-ink-faint)] tabular-nums">
                         ×{alert.count}
                       </span>
                     )}
                   </p>
-                  <p className="truncate text-xs text-[var(--color-ink-faint)]">
+                  <p className="truncate font-mono text-xs text-[var(--color-ink-faint)]">
                     {alert.checkId
                       ? `${alert.checkName}${alert.checkTarget ? ` (${alert.checkTarget})` : ""}`
                       : alert.agentName}
                   </p>
                 </Link>
-                {alert.silenced && <SilencedBadge />}
-                {alert.escalatedAt && <EscalatedBadge />}
-                <AckControl
-                  alertId={alert.id}
-                  acknowledgedAt={alert.acknowledgedAt}
-                  acknowledgedBy={alert.acknowledgedBy}
-                  canManage={canManage}
-                />
-                <span className="flex-shrink-0 text-xs text-[var(--color-ink-faint)]">
-                  {timeSince(alert.firedAt)}
-                </span>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {alert.silenced && <SilencedBadge />}
+                  {alert.escalatedAt && <EscalatedBadge />}
+                  <AckControl
+                    alertId={alert.id}
+                    acknowledgedAt={alert.acknowledgedAt}
+                    acknowledgedBy={alert.acknowledgedBy}
+                    canManage={canManage}
+                  />
+                  <span className="font-mono text-xs text-[var(--color-ink-faint)]">
+                    {timeSince(alert.firedAt)}
+                  </span>
+                </div>
               </div>
             ))}
-          </div>
-        </Panel>
-      ) : null}
 
-      {/* Checks — down checks and expiring certificates, so a black-box
-          monitoring incident is visible here without a separate trip to
-          /checks. Only rendered once at least one check exists. */}
-      {checks.length > 0 && (
-        <Panel className="mb-8">
-          <PanelHeader
+            {problemChecks.slice(0, 6).map((check) => (
+              <Link
+                key={`check-${check.id}`}
+                to="/checks"
+                className={`grid gap-3 border-l-2 px-4 py-2.5 transition-colors hover:bg-[var(--color-panel)] sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center ${STATUS_RAIL[checkStatus(check)]}`}
+              >
+                <StatusIndicator status={checkStatus(check)} dotOnly />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-[var(--color-ink)]">
+                    {check.name}
+                  </p>
+                  <p className="truncate font-mono text-xs text-[var(--color-ink-faint)]">
+                    {check.status === "down" ? "Down" : "Certificate expiring soon"} ·{" "}
+                    {check.target}
+                  </p>
+                </div>
+                <span className="font-mono text-xs text-[var(--color-ink-faint)] tabular-nums">
+                  {check.latency_ms ? `${check.latency_ms.toFixed(0)} ms` : "--"}
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,1.6fr)_minmax(280px,1fr)]">
+        <Section aria-labelledby="matrix-heading" className="mb-0">
+          <SectionHeader
+            id="matrix-heading"
+            title="Fleet"
+            description="Hosts with live resource pressure, unhealthy first."
+            meta={`${sortedFilteredAgents.length} hosts`}
+          />
+
+          {loading && agents.length === 0 ? (
+            <Skeleton className="h-40 w-full" />
+          ) : error ? null : agents.length === 0 ? (
+            <Panel>
+              <EmptyState
+                icon={Server}
+                title="No agents connected"
+                description="Add an agent to start monitoring your servers. Go to Agents to generate an install command."
+              />
+            </Panel>
+          ) : filteredAgents.length === 0 ? (
+            <Panel>
+              <EmptyState
+                icon={Server}
+                title="No agents match the selected tags"
+                description="Clear a tag filter above to see more servers."
+              />
+            </Panel>
+          ) : (
+            <div className="divide-y divide-[var(--color-line-soft)]">
+              {sortedFilteredAgents.map((agent) => {
+                const metrics = metricsSummary[agent.id];
+                const status = statusByAgentId.get(agent.id) ?? "offline";
+                return (
+                  <Link
+                    key={agent.id}
+                    to={`/servers/${agent.id}`}
+                    className={`grid gap-x-4 gap-y-2 border-l-2 px-4 py-2.5 transition-colors hover:bg-[var(--color-panel)] lg:grid-cols-[auto_minmax(160px,1fr)_minmax(280px,1.4fr)_auto] lg:items-center ${STATUS_RAIL[status]}`}
+                  >
+                    <StatusIndicator
+                      status={status}
+                      dotOnly
+                      pulse={status === "critical" || status === "offline"}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-[var(--color-ink)]">
+                        {agent.hostname || agent.name || "Pending host"}
+                      </p>
+                      <p className="truncate font-mono text-xs text-[var(--color-ink-faint)]">
+                        {agent.ip || "No IP"}
+                      </p>
+                    </div>
+                    <div className="grid gap-x-4 gap-y-1 sm:grid-cols-3">
+                      <MetricCell label="CPU" value={metrics?.cpu} />
+                      <MetricCell label="MEM" value={metrics?.memory} />
+                      <MetricCell label="DSK" value={metrics?.disk} />
+                    </div>
+                    <div className="flex items-center justify-between gap-4 lg:justify-end">
+                      <span className="truncate text-xs text-[var(--color-ink-muted)]">
+                        {agent.os || "Unknown OS"}
+                      </span>
+                      <span
+                        className="font-mono text-xs whitespace-nowrap text-[var(--color-ink-faint)]"
+                        title={agent.last_seen}
+                      >
+                        {timeSince(agent.last_seen)}
+                      </span>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </Section>
+
+        <Section aria-labelledby="checks-heading" className="mb-0">
+          <SectionHeader
+            id="checks-heading"
             title="Checks"
+            description="Black-box probes."
             actions={
               <Link
                 to="/checks"
-                className="text-sm font-medium text-[var(--color-signal)] hover:underline"
+                className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-signal)] hover:underline"
               >
+                <Radio className="h-3.5 w-3.5" aria-hidden="true" />
                 View all
               </Link>
             }
           />
-          {problemChecks.length === 0 ? (
-            <p className="px-5 py-4 text-sm text-[var(--color-ink-faint)]">
-              All checks are healthy.
-            </p>
+          {checksSummaryError ? (
+            <ErrorState title="Couldn't load check status" description={checksSummaryError} />
+          ) : checksSummaryLoading && checksSummary.length === 0 ? (
+            <Skeleton className="h-28 w-full" />
+          ) : configuredCheckCount === 0 ? (
+            <p className="px-4 py-4 text-sm text-[var(--color-ink-faint)]">No checks configured.</p>
           ) : (
             <div className="divide-y divide-[var(--color-line-soft)]">
-              {problemChecks.slice(0, 5).map((c) => (
+              {checksSummary.slice(0, 8).map((check) => (
                 <Link
-                  key={c.id}
+                  key={check.id}
                   to="/checks"
-                  className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-[var(--color-panel-raised)]"
+                  className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-l-2 px-4 py-2.5 text-sm transition-colors hover:bg-[var(--color-panel)] ${STATUS_RAIL[checkStatus(check)]}`}
                 >
-                  <StatusIndicator status={checkStatus(c)} dotOnly />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-[var(--color-ink)]">{c.name}</p>
-                    <p className="truncate text-xs text-[var(--color-ink-faint)]">
-                      {c.status === "down" ? "Down" : "Certificate expiring soon"} · {c.target}
+                  <StatusIndicator status={checkStatus(check)} dotOnly />
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-[var(--color-ink)]">{check.name}</p>
+                    <p className="truncate font-mono text-xs text-[var(--color-ink-faint)]">
+                      {check.target}
                     </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-mono text-xs text-[var(--color-ink-muted)] tabular-nums">
+                      {check.uptime_24h.toFixed(1)}%
+                    </p>
+                    <p className="text-2xs text-[var(--color-ink-faint)]">24h uptime</p>
                   </div>
                 </Link>
               ))}
             </div>
           )}
-        </Panel>
-      )}
-
-      {/* Tag filter — scopes both the FleetStrip hero above and the grid
-          below to agents carrying any of the selected tags. */}
-      {!loading && !error && agents.length > 0 && (
-        <TagFilterBar tags={allTags} selected={selectedTags} onToggle={toggleTag} />
-      )}
-
-      {/* Agent grid */}
-      {!loading && !error && agents.length === 0 ? (
-        <Panel>
-          <EmptyState
-            icon={Server}
-            title="No agents connected"
-            description="Add an agent to start monitoring your servers. Go to Agents to generate an install command."
-          />
-        </Panel>
-      ) : !loading && !error && filteredAgents.length === 0 ? (
-        <Panel>
-          <EmptyState
-            icon={Server}
-            title="No agents match the selected tags"
-            description="Clear a tag filter above to see more servers."
-          />
-        </Panel>
-      ) : !loading && !error ? (
-        <div>
-          <h3 className="mb-3 text-sm font-medium text-[var(--color-ink-muted)]">
-            Servers <span className="tabular-nums">({filteredAgents.length})</span>
-          </h3>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {filteredAgents.map((agent) => (
-              <ServerCard
-                key={agent.id}
-                agent={agent}
-                status={statusByAgentId.get(agent.id) ?? "offline"}
-                metrics={metricsSummary[agent.id]}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
+        </Section>
+      </div>
     </div>
   );
 }

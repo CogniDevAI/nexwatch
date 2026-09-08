@@ -3,9 +3,23 @@ import { ArrowUpDown } from "lucide-react";
 
 /** Table primitives shared by every data table in the app. Headers are
  *  sentence case (never tracked-out ALL-CAPS) — see DESIGN.md §6. */
-export function Table({ children }: { children: ReactNode }) {
+export function Table({
+  children,
+  variant = "panel",
+}: {
+  children: ReactNode;
+  /** "flush" drops the card frame so the rows themselves are the object on the
+   *  page rather than the container around them. See DESIGN.md §3. */
+  variant?: "panel" | "flush";
+}) {
   return (
-    <div className="overflow-hidden rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]">
+    <div
+      className={
+        variant === "flush"
+          ? "border-y border-[var(--color-line)]"
+          : "overflow-hidden rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-panel)]"
+      }
+    >
       <div className="overflow-x-auto">
         <table className="w-full text-sm">{children}</table>
       </div>
@@ -33,7 +47,7 @@ export function Th({
 }: ThProps) {
   return (
     <th
-      className={`sticky top-0 bg-[var(--color-panel)] px-5 py-3 ${ALIGN_TEXT[align]} text-xs font-medium text-[var(--color-ink-muted)] ${
+      className={`sticky top-0 z-10 bg-[var(--color-void-lift)] px-4 py-2.5 ${ALIGN_TEXT[align]} text-xs font-medium text-[var(--color-ink-muted)] ${
         sortable ? "cursor-pointer transition-colors select-none hover:text-[var(--color-ink)]" : ""
       } ${className}`}
       {...rest}
@@ -56,7 +70,10 @@ interface TdProps extends TdHTMLAttributes<HTMLTableCellElement> {
 
 export function Td({ children, align = "left", className = "", ...rest }: TdProps) {
   return (
-    <td className={`px-5 py-3 ${ALIGN_TEXT[align]} text-[var(--color-ink)] ${className}`} {...rest}>
+    <td
+      className={`px-4 py-2.5 ${ALIGN_TEXT[align]} text-[var(--color-ink)] ${className}`}
+      {...rest}
+    >
       {children}
     </td>
   );

@@ -49,3 +49,6 @@ Thumbs.db
 /nexwatch-agent
 # Local Pi runtime state
 .atl/
+.pi/
+.pi-*/
+.codegraph/

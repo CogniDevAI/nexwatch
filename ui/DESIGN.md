@@ -9,16 +9,17 @@ editing this file first.
 
 ## Quick reference
 
-| Decision | What we chose | Rejected default |
-|---|---|---|
-| Palette | Deep blue-charcoal void + one signal-blue accent, semantic status colors kept separate from brand accent | Near-black + cyan/purple dual accent |
-| Type | IBM Plex Sans (UI) + IBM Plex Mono (data) | Inter |
-| Cards | Flat panels, 1px border, no shadow, 8px radius | Identical rounded-xl cards with soft shadow |
-| Status | Icon shape + color + text label (never color alone) | Colored pill with text only |
-| Table headers | Sentence case, normal weight | Tracked-out ALL-CAPS eyebrows |
-| The memorable thing | FleetStrip: one real-health tick per agent (connectivity + any firing alert), used as the hero bar on Dashboard/Agents and compacted into the sidebar Signal Rail on every page | — |
-| Data states | Loading → error → empty → content, always in that order; a failed fetch never silently renders as "no data" | Empty state shown on both a real error and a genuinely empty list |
-| Motion | One deliberate pulse on critical/offline signals; everything else is a fast, user-triggered 120ms transition | Scattered fade-ins and hover glows |
+| Decision            | What we chose                                                                                                                                                                   | Rejected default                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Palette             | Deep blue-charcoal void + one signal-blue accent, semantic status colors kept separate from brand accent                                                                        | Near-black + cyan/purple dual accent                                                |
+| Type                | IBM Plex Sans (UI) + IBM Plex Mono (data)                                                                                                                                       | Inter                                                                               |
+| Cards               | Flat panels, 1px border, no shadow, 8px radius — and only where a card is genuinely an object; page structure is flush sections and full-bleed bands                            | Identical rounded-xl cards with soft shadow, one per section                        |
+| Page frame          | Persistent operations chrome: quiet sidebar rail + a top context bar carrying live fleet posture                                                                                | Sidebar and a mobile-only header, page content floating in a narrow centered column |
+| Status              | Icon shape + color + text label (never color alone)                                                                                                                             | Colored pill with text only                                                         |
+| Table headers       | Sentence case, normal weight                                                                                                                                                    | Tracked-out ALL-CAPS eyebrows                                                       |
+| The memorable thing | FleetStrip: one real-health tick per agent (connectivity + any firing alert), used as the hero bar on Dashboard/Agents and compacted into the sidebar Signal Rail on every page | —                                                                                   |
+| Data states         | Loading → error → empty → content, always in that order; a failed fetch never silently renders as "no data"                                                                     | Empty state shown on both a real error and a genuinely empty list                   |
+| Motion              | One deliberate pulse on critical/offline signals; everything else is a fast, user-triggered 120ms transition                                                                    | Scattered fade-ins and hover glows                                                  |
 
 ---
 
@@ -28,13 +29,14 @@ Five base tokens, plus a status set that is deliberately independent from the br
 accent so "this is clickable" (signal blue) is never confused with "this is broken"
 (critical red).
 
-| Token | Hex | Role |
-|---|---|---|
-| `--color-void` | `#0a0e16` | Page background. A deep blue-charcoal, not pure/near-black. |
-| `--color-panel` | `#121926` | Card, table, and panel surfaces. |
-| `--color-panel-raised` | `#1a2333` | Hover state, popovers, the active tab, modal surface. |
-| `--color-line` | `#232d3d` | Borders and dividers. |
-| `--color-signal` | `#5b9dff` | The ONE brand accent: links, focus ring, primary buttons, selected nav/tab, primary chart series. Never used for status. |
+| Token                  | Hex       | Role                                                                                                                                                                    |
+| ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--color-void`         | `#0a0e16` | Page background. A deep blue-charcoal, not pure/near-black.                                                                                                             |
+| `--color-panel`        | `#121926` | Card, table, and panel surfaces.                                                                                                                                        |
+| `--color-panel-raised` | `#1a2333` | Hover state, popovers, the active tab, modal surface.                                                                                                                   |
+| `--color-line`         | `#232d3d` | Borders and dividers.                                                                                                                                                   |
+| `--color-void-lift`    | `#0d131f` | Operations chrome only — top context bar, sidebar, full-bleed page/posture bands. A half-step above the void so the frame reads as frame, not as another content panel. |
+| `--color-signal`       | `#5b9dff` | The ONE brand accent: links, focus ring, primary buttons, selected nav/tab, primary chart series. Never used for status.                                                |
 
 Text tints derived from the same family: `--color-ink` `#e7ecf3` (primary),
 `--color-ink-muted` `#93a0b4` (secondary), `--color-ink-faint` `#57647a` (tertiary,
@@ -43,17 +45,17 @@ placeholders, disabled).
 **Status colors** (semantic, independent of the brand accent, each paired with a fixed
 icon shape so color-blind readers never depend on hue alone):
 
-| Status | Color | Hex | Shape |
-|---|---|---|---|
-| Operational | green | `#34d399` | filled circle |
-| Warning | amber | `#f5a524` | filled triangle |
-| Critical | red | `#f5484f` | filled diamond with `!` |
-| Offline / unknown | slate | `#5b6576` | hollow ring with slash |
+| Status            | Color | Hex       | Shape                   |
+| ----------------- | ----- | --------- | ----------------------- |
+| Operational       | green | `#34d399` | filled circle           |
+| Warning           | amber | `#f5a524` | filled triangle         |
+| Critical          | red   | `#f5484f` | filled diamond with `!` |
+| Offline / unknown | slate | `#5b6576` | hollow ring with slash  |
 
 ### Why, and what we rejected
 
 - **Rejected near-black `#0B0B0B`/`#111` + single acid accent.** It's the single most
-  common "AI dashboard" tell. A deep *blue*-charcoal void reads as considered rather
+  common "AI dashboard" tell. A deep _blue_-charcoal void reads as considered rather
   than default, and gives status colors (which are all warm-ish or green) more contrast
   to sit against.
 - **Rejected the existing cyan+purple dual-accent scheme.** Two decorative accents with
@@ -69,10 +71,10 @@ icon shape so color-blind readers never depend on hue alone):
 
 ## 2. Typography
 
-| Family | Role | Package |
-|---|---|---|
-| IBM Plex Sans | All UI text: headings, body, labels, buttons | `@fontsource/ibm-plex-sans` (400/500/600/700), self-hosted |
-| IBM Plex Mono | All data: PIDs, ports, percentages, hex, byte counts, SQL text, thread dumps, hostnames/IPs where exactness matters | `@fontsource/ibm-plex-mono` (400/500/600), self-hosted |
+| Family        | Role                                                                                                                | Package                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| IBM Plex Sans | All UI text: headings, body, labels, buttons                                                                        | `@fontsource/ibm-plex-sans` (400/500/600/700), self-hosted |
+| IBM Plex Mono | All data: PIDs, ports, percentages, hex, byte counts, SQL text, thread dumps, hostnames/IPs where exactness matters | `@fontsource/ibm-plex-mono` (400/500/600), self-hosted     |
 
 Both ship as static-weight `@fontsource` packages bundled by Vite — no runtime request
 to Google Fonts, which matters because the hub commonly runs with no internet access.
@@ -85,16 +87,16 @@ next to its port in Plex Mono) never looks like two unrelated fonts collided.
 
 ### Type scale (Elements of Typographic Style ratios, tuned for UI density)
 
-| Token | Size | Line height | Use |
-|---|---|---|---|
-| `text-2xs` | 11px | 1.4 | Timestamps, micro meta |
-| `text-xs` | 12px | 1.5 | Captions, status chip labels |
-| `text-sm` | 13px | 1.55 | Secondary UI text, table cells |
-| `text-base` | 15px | 1.6 | Body default |
-| `text-lg` | 17px | 1.5 | Card/section titles |
-| `text-xl` | 20px | 1.35 | Page section headings |
-| `text-2xl` | 26px | 1.25 | Page titles |
-| `text-3xl` | 36px | 1.15 | Hero numbers (hardening score, dashboard headline) |
+| Token       | Size | Line height | Use                                                |
+| ----------- | ---- | ----------- | -------------------------------------------------- |
+| `text-2xs`  | 11px | 1.4         | Timestamps, micro meta                             |
+| `text-xs`   | 12px | 1.5         | Captions, status chip labels                       |
+| `text-sm`   | 13px | 1.55        | Secondary UI text, table cells                     |
+| `text-base` | 15px | 1.6         | Body default                                       |
+| `text-lg`   | 17px | 1.5         | Card/section titles                                |
+| `text-xl`   | 20px | 1.35        | Page section headings                              |
+| `text-2xl`  | 26px | 1.25        | Page titles                                        |
+| `text-3xl`  | 36px | 1.15        | Hero numbers (hardening score, dashboard headline) |
 
 Line length: prose (empty states, error copy, descriptions) is capped at `max-w-prose`
 (~65ch). Tables are the exception by nature — they scroll horizontally in their own
@@ -102,39 +104,81 @@ container rather than wrap.
 
 ## 3. Layout concept
 
+### Sections, not cards (R3)
+
+The first pass replaced generic SaaS cards with flat `Panel`s but kept the underlying
+shape: every page was a vertical stack of bordered boxes of equal weight, so nothing on
+screen claimed priority and the dashboard read as seven rectangles rather than as an
+operations console. The correction is structural, not cosmetic:
+
+- **A `Panel` is for an object, not for a section.** A modal, a mobile agent card, an
+  empty/error state — things that are genuinely one bounded item — keep the card frame.
+  A page region ("Attention", "Fleet", "Checks") is a `Section` + `SectionHeader`: a
+  title, a rule under it, and its rows. Hierarchy comes from typography, rules, and
+  density rather than from a border on four sides. `Panel` and `Table` both take
+  `variant="flush"` for the in-between cases.
+- **Bands reach the edges.** The page header and the fleet posture strip are full-bleed
+  (`.bleed-x`, `--color-void-lift`) so chrome reads as chrome. `.bleed-x`'s inset mirrors
+  `AppShell`'s `<main>` padding exactly and must change with it.
+- **Rows carry a left status rail.** Every operator row (incident, host, check) repeats
+  its status as a 2px left border in that status's color, so scanning the left edge finds
+  the bad row before any text is read. Color still never carries status alone — the
+  glyph is always there too (§1).
+- **Summary numbers are contextual, not KPI cards.** Counts live in the page header's
+  `meta` slot as label + mono value. Four equal boxes across the top would claim those
+  totals matter as much as the incident list underneath them; they do not.
+
+### Operations chrome (R3)
+
+`AppShell` is the frame, not a nav column with a mobile header bolted on:
+
+- The **top context bar** is visible at every breakpoint and carries live fleet posture
+  (operational/warning/critical/offline, non-zero buckets only), a firing-alert link, and
+  the realtime connection state. It reads the stores the shell already fetches once per
+  session, so it costs no extra request (§10).
+- The **sidebar** drops to `w-60` on `--color-void-lift` and loses the filled pill on the
+  active item — an active nav item is a signal-blue left rail plus tinted text, the same
+  rail language page content uses. Group headings are quiet sentence-case labels, not
+  tracked-out mono eyebrows (§6 already forbids those everywhere else).
+- **Content uses the width it has**: `max-w-[1600px]`, not `max-w-7xl`. A fleet table on
+  a wide monitor should not be a narrow column with two empty thirds beside it.
+
 ### Dashboard
 
-```
+```text
 ┌────────────────────────────────────────────────────────────┐
-│ NexWatch                                    [signal rail]  │  <- sidebar, see below
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ [●][●][▲][○] ...  one tick per agent, real width      │  │  <- FleetStrip (lg):
-│  │ 12 of 15 operational, 2 warning, 1 offline            │  │     one segment IS one
-│  └──────────────────────────────────────────────────────┘  │     agent, click-through
-│                                                              │
-│  Active alerts                        ▲ 2 warning ◆ 1 crit │  <- only rendered when
-│  ┌──────────────────────────────────────────────────────┐  │     firing alerts exist;
-│  │ ◆ High CPU   db-02      5m ago                        │  │     otherwise a single
-│  │ ▲ Disk full  cache-3    12m ago                       │  │     "No active alerts"
-│  └──────────────────────────────────────────────────────┘  │     line inside the strip
-│                                                                │  panel above
-│  Servers (15)                                                │
-│  ┌───────────┐ ┌───────────┐ ┌───────────┐                 │
-│  │ ● web-01  │ │ ▲ db-02   │ │ ○ cache-3 │  ...             │  <- agent cards, left
-│  │ 10.0.0.4  │ │ 10.0.0.9  │ │ offline   │                 │     accent bar = status
-│  │ cpu 22%   │ │ cpu 91%   │ │ 4h ago    │                 │
-│  │ mem 41%   │ │ mem 88%   │ │           │                 │
-│  └───────────┘ └───────────┘ └───────────┘                 │
+│ ● 12 operational  ▲ 2 warning  ○ 1 offline      3 firing   │  <- top context bar
+├────────────────────────────────────────────────────────────┤
+│ Operations                                                 │  <- page header band:
+│ Agents 12/15 online   Active alerts 3   Checks 8, 1 down   │     meta line, never
+├────────────────────────────────────────────────────────────┤     four KPI cards
+│ [● web-01][● api-2][▲ db-02][○ cache-3] ...                │  <- FleetStrip (lg) in
+│ 12 of 15 operational, 2 warning, 1 offline                 │     a full-bleed band
 └────────────────────────────────────────────────────────────┘
+  Attention                                          3 open
+  ──────────────────────────────────────────────────────────
+  ▌◆ High CPU       db-02        [Ack]        5m ago    <- left rail = status
+  ▌▲ Cert expiring  api.example                12m ago
+
+  Fleet                    15 hosts │ Checks         View all
+  ───────────────────────────────── │ ─────────────────────
+  ▌▲ db-02   CPU 91% ████████░      │ ▌● api        99.9%
+  ▌● web-01  CPU 22% ██░░░░░░░      │ ▌◆ billing    91.2%
 ```
+
+The attention lane and the posture band come first because they are what an operator
+opens this page to read; checks and the fleet matrix sit below in a width-weighted
+two-column row (`1.6fr` / `1fr`) instead of two more equal boxes. Resource pressure in a
+fleet row is a mono percentage **plus** a proportional bar — the bar is what a 3 a.m.
+glance actually reads. A host that has not reported a metric renders `--`, never a zeroed
+bar, which would read as "idle" instead of "unknown" (§9).
 
 The three identical "Total / Online / Offline" stat cards became a `FleetStrip`: one
 tick per agent (not one segment per status bucket), each individually clickable and
-colored/shaped by that agent's *real* health — connectivity plus any firing alert, not
+colored/shaped by that agent's _real_ health — connectivity plus any firing alert, not
 just online/offline. This is what makes the strip answer "which one is unhealthy"
 instead of only "how many are unhealthy." Below it, "Active alerts" surfaces the actual
-incidents (rule, host, severity, since) so the dashboard shows *why* a tick is red, not
+incidents (rule, host, severity, since) so the dashboard shows _why_ a tick is red, not
 just that it is.
 
 ### Host detail
@@ -431,7 +475,7 @@ file) above their agent list/grid: toggleable chips built from every tag current
 multiple selected = ANY (matching how `target_tags` targeting works on alert rules, so the
 filter behaves the way an operator already expects from rule targeting). The filter scopes
 the page's `FleetStrip` hero as well as its table/grid — filtering to a tag and still
-seeing the *whole* fleet's health strip would defeat the point of narrowing the view.
+seeing the _whole_ fleet's health strip would defeat the point of narrowing the view.
 
 #### Self-update (F9)
 
@@ -461,7 +505,7 @@ local agent state itself.
 ### Settings
 
 Stacked panels (Data retention, General), each with a one-line description under its
-heading. The retention control is presets *or* one numeric input — not presets, a
+heading. The retention control is presets _or_ one numeric input — not presets, a
 slider, and a separate "X days" readout all showing the same value three times. "Save
 settings" lives in the page header's action slot, the same place every other page puts
 its primary action, so it's visible without scrolling on mobile. The Users and
@@ -517,7 +561,7 @@ compare vertically at a glance (already correct in the current code; kept).
 
 ## 4. The memorable thing: FleetStrip
 
-One component, two sizes: `FleetStrip` renders one *segment* per agent — solidly filled
+One component, two sizes: `FleetStrip` renders one _segment_ per agent — solidly filled
 in its status color (not a bordered outline around a small icon), with the status glyph
 and, at `size="lg"`, the hostname on top in whichever of void-dark or white gives better
 contrast against that status color. Each agent's segment fills `1/N` of the row, so a
@@ -536,7 +580,7 @@ where every agent is "online" but one has a firing disk-full alert should not lo
 uniformly green.
 
 Why this and not a bigger dashboard-only hero: the brief's actual primary job is "is
-everything healthy, and if not, where," answered in under three seconds, *repeatedly*,
+everything healthy, and if not, where," answered in under three seconds, _repeatedly_,
 all day, often while already investigating a different host. A hero that only exists on
 the Dashboard only helps on the Dashboard. The same component surfacing on Agents (as
 the literal fleet-management hero) and compacting into every other page's sidebar
@@ -578,40 +622,41 @@ All under `src/components/ui/`. Existing feature components consume these instea
 repeating `rounded-xl border border-[var(--color-border-default)] bg-[var(--color-bg-surface)]`
 inline (previously duplicated in ~25 places).
 
-| Component | Purpose | Notes |
-|---|---|---|
-| `PageHeader` | Page-level title + description + actions | `src/components/ui/PageHeader.tsx`. Every page opens with this — title, an optional one-line description, and a right-aligned (wraps below on mobile) actions slot for the page's primary button, so "New X"/"Save" always lives in the same place. |
-| `Panel` | Card/section container | 1px border, `--color-panel` bg, 8px radius, no shadow. Optional `PanelHeader` with title + actions slot. |
-| `StatusIndicator` | Status glyph + label | Maps `ok/warning/critical/offline` → shape + color + text. Used for agents, docker containers, alerts, services, hardening checks. Has `dotOnly` mode for dense tables. |
-| `SeverityBadge` | Finding-severity chip | `src/components/ui/SeverityBadge.tsx`. A distinct six-level taxonomy (`critical/high/medium/low/info/unknown`) for CVE/hardening findings — not the four-state `StatusIndicator` taxonomy, since a finding's severity and an agent/check's live status answer different questions. Never mixed with `StatusIndicator` on the same fact. |
-| `rowClass` | Zebra/hover row background | `src/components/ui/rowClass.ts`. One helper every table body row calls (`rowClass(idx)`) so striping and hover state are pixel-identical across Agents, Alerts, Alert history, Silences, Checks, Users, Audit log. |
-| `MetricTile` | Label + big mono value | Used for stat summaries (hardening score breakdown, Oracle sessions, vuln counts) instead of ad hoc `<div className="text-2xl font-bold">` blocks. |
-| `FleetStrip` | One tick per agent, real health, click-through | The memorable thing, described in §4. `size="lg"` (Dashboard/Agents hero) or `size="sm"` (Signal Rail). |
-| `Table`, `Th`, `Td` | Data table primitives | Sentence-case header, sortable header variant, sticky header, consistent zebra/hover. |
-| `Button` | primary/secondary/accent/danger/ghost × sm/md | Replaces one-off button class strings. |
-| `Input`, `Select`, `Textarea`, `Label`, `FieldCaption` | Form controls | Consistent border/focus ring, label association. `Select` renders a custom chevron and always fills its wrapper — the wrapper (not the `<select>`) takes the width class, so a caller asking for `w-auto` never has to fight a baked-in `w-full`. |
-| `Toggle` | On/off control | A real `<button role="switch">`, not a checkbox-plus-peer-selector hack. |
-| `Tabs` | Accessible underline tab bar | `src/components/ui/Tabs.tsx`. `role="tablist"`/`role="tab"`/`aria-selected` plus WAI-ARIA keyboard nav (arrow keys move and select, wrapping; Home/End jump to first/last; roving `tabIndex` so Tab skips inactive tabs) and an optional per-tab icon. Shared by the host detail page's section tabs and the Add-agent modal's Linux/Windows OS tabs — previously two separate hand-rolled, keyboard-inaccessible implementations. Always scrolls horizontally within itself rather than growing past its row — see "Row and tab-bar overflow" below. |
-| `Menu` | Row-action overflow menu | `src/components/ui/Menu.tsx`. A `⋯` `IconButton` trigger (`aria-haspopup="menu"`/`aria-expanded`) opening a `role="menu"` panel of `role="menuitem"` buttons — arrow-key roving focus, Escape closes and returns focus to the trigger, an outside click or a selected item also closes it. See "Row action overflow" below. |
-| `Modal` | Centered dialog | Used by all "New X" forms and the thread dump viewer. Escape closes it. |
-| `Toast` | Transient confirmation | Used for settings save, test-notification result, thread-dump request errors. |
-| `EmptyState` | Icon + heading + body + optional action | Rendered only after a successful, genuinely empty fetch — see §9. |
-| `ErrorState` | Icon + heading + body + optional retry | Rendered on a failed fetch, with the server's message and a "Try again" action — see §9. |
-| `PlatformIcon` | Small OS/platform glyph | `src/components/ui/PlatformIcon.tsx`. Maps `agent.platform` (windows/linux/darwin) to a generic device/terminal shape, never an OS brand mark. Used in the Agents table, host detail header, and the Add agent modal's OS tabs. |
-| `PlatformUnsupportedState` | "Not available on \<platform\>" placeholder | `src/components/ui/PlatformUnsupportedState.tsx`. Wraps `EmptyState` for a host-detail tab whose collector has no implementation on the agent's OS — see "Unsupported-on-platform tabs (Windows)" above. |
-| `Skeleton` | Loading placeholder block | Replaces spinning-icon-plus-"Loading…" text where a shaped placeholder reads faster. |
-| `SignalRail` | Sidebar wrapper around `FleetStrip` | Reads `useFleetHealth` (a pure selector — see §10) and renders the compact strip; mounted once in `AppShell`, visible on every page. |
-| `NavCountBadge` | Quiet nav-item count chip | `src/components/layout/AppShell.tsx`. A single neutral tone regardless of count — see "Quiet count badges (R2)" under Navigation. Used on Alert history (firing count) and Silences (active count); hidden at zero. |
-| `TagInput` | Chip-style multi-value tag editor | Type + Enter/comma to add, Backspace on an empty field removes the last chip, case-insensitive dedupe, suggestion dropdown filtered by the current draft. Used by agent tag editing, `AlertRuleForm`'s tag targeting, and `SilenceForm`'s tag scope. |
-| `TagChips`, `TagFilterBar` | Read-only tag display / toggleable tag filter | Both in `src/components/ui/TagChips.tsx`. `TagChips` renders a tag list as muted chips (Agents table/cards, host detail header). `TagFilterBar` renders every tag in use as a toggle chip, multiple selected = ANY — used above the Agents table and the Dashboard grid, scoping the `FleetStrip` hero too. |
-| `AckControl` | Acknowledge/undo control for one firing alert | `src/components/alerts/AckControl.tsx`. Calls the ack/unack endpoints and relies on the caller's existing realtime subscription to reflect the result — never patches local state itself (see §10). Used by Dashboard's Active alerts, Alert history, and a host's Alerts tab. |
-| `SilencedBadge`, `EscalatedBadge` | Alert flag chips | `src/components/alerts/AlertBadges.tsx`. Independent of `StatusIndicator`'s ok/warning/critical/offline taxonomy — either can apply at any severity. |
-| `CheckForm` | Create/edit form for a black-box check | `src/components/checks/CheckForm.tsx`. Type radio (http/tcp/icmp) drives which fields show — method/expected status/body-contains/verify TLS/warn-days are http-only; interval and timeout each get quick presets plus an exact field, same pattern as `AlertRuleForm`'s duration. |
-| `CheckDetailDrawer` | Expandable row content for one check | `src/components/checks/CheckDetailDrawer.tsx`. A 24h/7d toggle, a `MetricChart` latency series (reused as-is — see §11), and the most recent results list with a status dot per row. |
-| `CveScanTab` | Host detail "CVE scan" tab | `src/components/server/CveScanTab.tsx`. Severity tiles, scanner info line, per-target findings tables with severity/fixable/search filters, and a not-available state with install commands for Trivy and Grype. See the host detail section above. |
-| `LogsView` | Shared log search/live-tail view | `src/components/logs/LogsView.tsx`. Powers both the standalone `/logs` page and, via `LogsTab` (`src/components/server/LogsTab.tsx`, an `agentId`-locked wrapper), a host detail tab. See §13. |
-| `UpdateAvailableBadge`, `UpdateStatusChip` | Self-update flag chips | `src/components/agents/UpdateBadges.tsx`. The badge is independent of `StatusIndicator`'s taxonomy, styled like `EscalatedBadge`; the chip renders a live in-progress stage or a failed state with an optional Retry action. See §3 "Self-update (F9)". |
-| `UpdateAgentModal`, `UpdateAllModal` | Self-update confirmation modals | `src/components/agents/`. Single-agent and admin fan-out confirmations for `POST /api/custom/agents/{id}/update` and `.../update-all`. See §3 "Self-update (F9)". |
+| Component                                              | Purpose                                         | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------ | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PageHeader`                                           | Page-level title + description + actions + meta | `src/components/ui/PageHeader.tsx`. Every page opens with this — a full-bleed bar (`.bleed-x`, rule underneath), not a floating block, so the first box on a page is real content. Title, optional one-line description, right-aligned actions slot for the page's primary button, and a `meta` slot for compact contextual counts (label + mono value) instead of KPI cards.                                                                                                                                                                         |
+| `Panel`                                                | Card container for one bounded object           | 1px border, `--color-panel` bg, 8px radius, no shadow. Optional `PanelHeader` with title + actions slot. `variant="flush"` drops the frame to horizontal rules. Page _regions_ use `Section`, not `Panel` — see §3 ("Sections, not cards").                                                                                                                                                                                                                                                                                                           |
+| `Section`, `SectionHeader`                             | Flush page region                               | `src/components/ui/Panel.tsx`. Title + rule + optional description, `meta` (mono counts) and `actions` slots. The default container for a page region; the border-on-four-sides `Panel` is the exception, not the rule.                                                                                                                                                                                                                                                                                                                               |
+| `StatusIndicator`                                      | Status glyph + label                            | Maps `ok/warning/critical/offline` → shape + color + text. Used for agents, docker containers, alerts, services, hardening checks. Has `dotOnly` mode for dense tables.                                                                                                                                                                                                                                                                                                                                                                               |
+| `SeverityBadge`                                        | Finding-severity chip                           | `src/components/ui/SeverityBadge.tsx`. A distinct six-level taxonomy (`critical/high/medium/low/info/unknown`) for CVE/hardening findings — not the four-state `StatusIndicator` taxonomy, since a finding's severity and an agent/check's live status answer different questions. Never mixed with `StatusIndicator` on the same fact.                                                                                                                                                                                                               |
+| `rowClass`                                             | Zebra/hover row background                      | `src/components/ui/rowClass.ts`. One helper every table body row calls (`rowClass(idx)`) so striping and hover state are pixel-identical across Agents, Alerts, Alert history, Silences, Checks, Users, Audit log.                                                                                                                                                                                                                                                                                                                                    |
+| `MetricTile`                                           | Label + big mono value                          | Used for stat summaries (hardening score breakdown, Oracle sessions, vuln counts) instead of ad hoc `<div className="text-2xl font-bold">` blocks. Left-aligned with the label above the figure — centered numbers fought §3's alignment rule.                                                                                                                                                                                                                                                                                                        |
+| `FleetStrip`                                           | One tick per agent, real health, click-through  | The memorable thing, described in §4. `size="lg"` (Dashboard/Agents hero) or `size="sm"` (Signal Rail).                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Table`, `Th`, `Td`                                    | Data table primitives                           | Sentence-case header, sortable header variant, sticky header, consistent zebra/hover. `variant="flush"` drops the card frame so the rows are the object on the page (§3).                                                                                                                                                                                                                                                                                                                                                                             |
+| `Button`                                               | primary/secondary/accent/danger/ghost × sm/md   | Replaces one-off button class strings.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `Input`, `Select`, `Textarea`, `Label`, `FieldCaption` | Form controls                                   | Consistent border/focus ring, label association. `Select` renders a custom chevron and always fills its wrapper — the wrapper (not the `<select>`) takes the width class, so a caller asking for `w-auto` never has to fight a baked-in `w-full`.                                                                                                                                                                                                                                                                                                     |
+| `Toggle`                                               | On/off control                                  | A real `<button role="switch">`, not a checkbox-plus-peer-selector hack.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `Tabs`                                                 | Accessible underline tab bar                    | `src/components/ui/Tabs.tsx`. `role="tablist"`/`role="tab"`/`aria-selected` plus WAI-ARIA keyboard nav (arrow keys move and select, wrapping; Home/End jump to first/last; roving `tabIndex` so Tab skips inactive tabs) and an optional per-tab icon. Shared by the host detail page's section tabs and the Add-agent modal's Linux/Windows OS tabs — previously two separate hand-rolled, keyboard-inaccessible implementations. Always scrolls horizontally within itself rather than growing past its row — see "Row and tab-bar overflow" below. |
+| `Menu`                                                 | Row-action overflow menu                        | `src/components/ui/Menu.tsx`. A `⋯` `IconButton` trigger (`aria-haspopup="menu"`/`aria-expanded`) opening a `role="menu"` panel of `role="menuitem"` buttons — arrow-key roving focus, Escape closes and returns focus to the trigger, an outside click or a selected item also closes it. See "Row action overflow" below.                                                                                                                                                                                                                           |
+| `Modal`                                                | Centered dialog                                 | Used by all "New X" forms and the thread dump viewer. Escape closes it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Toast`                                                | Transient confirmation                          | Used for settings save, test-notification result, thread-dump request errors.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `EmptyState`                                           | Icon + heading + body + optional action         | Rendered only after a successful, genuinely empty fetch — see §9.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ErrorState`                                           | Icon + heading + body + optional retry          | Rendered on a failed fetch, with the server's message and a "Try again" action — see §9.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `PlatformIcon`                                         | Small OS/platform glyph                         | `src/components/ui/PlatformIcon.tsx`. Maps `agent.platform` (windows/linux/darwin) to a generic device/terminal shape, never an OS brand mark. Used in the Agents table, host detail header, and the Add agent modal's OS tabs.                                                                                                                                                                                                                                                                                                                       |
+| `PlatformUnsupportedState`                             | "Not available on \<platform\>" placeholder     | `src/components/ui/PlatformUnsupportedState.tsx`. Wraps `EmptyState` for a host-detail tab whose collector has no implementation on the agent's OS — see "Unsupported-on-platform tabs (Windows)" above.                                                                                                                                                                                                                                                                                                                                              |
+| `Skeleton`                                             | Loading placeholder block                       | Replaces spinning-icon-plus-"Loading…" text where a shaped placeholder reads faster.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `SignalRail`                                           | Sidebar wrapper around `FleetStrip`             | Reads `useFleetHealth` (a pure selector — see §10) and renders the compact strip; mounted once in `AppShell`, visible on every page.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `NavCountBadge`                                        | Quiet nav-item count chip                       | `src/components/layout/AppShell.tsx`. A single neutral tone regardless of count — see "Quiet count badges (R2)" under Navigation. Used on Alert history (firing count) and Silences (active count); hidden at zero.                                                                                                                                                                                                                                                                                                                                   |
+| `TagInput`                                             | Chip-style multi-value tag editor               | Type + Enter/comma to add, Backspace on an empty field removes the last chip, case-insensitive dedupe, suggestion dropdown filtered by the current draft. Used by agent tag editing, `AlertRuleForm`'s tag targeting, and `SilenceForm`'s tag scope.                                                                                                                                                                                                                                                                                                  |
+| `TagChips`, `TagFilterBar`                             | Read-only tag display / toggleable tag filter   | Both in `src/components/ui/TagChips.tsx`. `TagChips` renders a tag list as muted chips (Agents table/cards, host detail header). `TagFilterBar` renders every tag in use as a toggle chip, multiple selected = ANY — used above the Agents table and the Dashboard grid, scoping the `FleetStrip` hero too.                                                                                                                                                                                                                                           |
+| `AckControl`                                           | Acknowledge/undo control for one firing alert   | `src/components/alerts/AckControl.tsx`. Calls the ack/unack endpoints and relies on the caller's existing realtime subscription to reflect the result — never patches local state itself (see §10). Used by Dashboard's Active alerts, Alert history, and a host's Alerts tab.                                                                                                                                                                                                                                                                        |
+| `SilencedBadge`, `EscalatedBadge`                      | Alert flag chips                                | `src/components/alerts/AlertBadges.tsx`. Independent of `StatusIndicator`'s ok/warning/critical/offline taxonomy — either can apply at any severity.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `CheckForm`                                            | Create/edit form for a black-box check          | `src/components/checks/CheckForm.tsx`. Type radio (http/tcp/icmp) drives which fields show — method/expected status/body-contains/verify TLS/warn-days are http-only; interval and timeout each get quick presets plus an exact field, same pattern as `AlertRuleForm`'s duration.                                                                                                                                                                                                                                                                    |
+| `CheckDetailDrawer`                                    | Expandable row content for one check            | `src/components/checks/CheckDetailDrawer.tsx`. A 24h/7d toggle, a `MetricChart` latency series (reused as-is — see §11), and the most recent results list with a status dot per row.                                                                                                                                                                                                                                                                                                                                                                  |
+| `CveScanTab`                                           | Host detail "CVE scan" tab                      | `src/components/server/CveScanTab.tsx`. Severity tiles, scanner info line, per-target findings tables with severity/fixable/search filters, and a not-available state with install commands for Trivy and Grype. See the host detail section above.                                                                                                                                                                                                                                                                                                   |
+| `LogsView`                                             | Shared log search/live-tail view                | `src/components/logs/LogsView.tsx`. Powers both the standalone `/logs` page and, via `LogsTab` (`src/components/server/LogsTab.tsx`, an `agentId`-locked wrapper), a host detail tab. See §13.                                                                                                                                                                                                                                                                                                                                                        |
+| `UpdateAvailableBadge`, `UpdateStatusChip`             | Self-update flag chips                          | `src/components/agents/UpdateBadges.tsx`. The badge is independent of `StatusIndicator`'s taxonomy, styled like `EscalatedBadge`; the chip renders a live in-progress stage or a failed state with an optional Retry action. See §3 "Self-update (F9)".                                                                                                                                                                                                                                                                                               |
+| `UpdateAgentModal`, `UpdateAllModal`                   | Self-update confirmation modals                 | `src/components/agents/`. Single-agent and admin fan-out confirmations for `POST /api/custom/agents/{id}/update` and `.../update-all`. See §3 "Self-update (F9)".                                                                                                                                                                                                                                                                                                                                                                                     |
 
 Two pure-selector hooks back this: `useActiveAlerts` (firing alerts grouped and enriched
 with rule name/severity and agent hostname, plus each group's silenced/acknowledged/
@@ -693,7 +738,7 @@ Every list-fetching page follows the same order, and never skips a state:
 
 A failed request must render `ErrorState` with the server's actual message and a "Try
 again" action that re-runs the fetch — it must never fall through to `EmptyState`,
-which claims a *successful* response came back with nothing in it. Those are different
+which claims a _successful_ response came back with nothing in it. Those are different
 facts and the interface says which one is true. `EmptyState` renders only once a fetch
 has actually succeeded and the list is genuinely empty. This applies to Dashboard,
 Agents, Alert rules, Alert history, Silences, Notifications, Users, Audit log, and Logs —
@@ -710,7 +755,7 @@ independently, which multiplied into a real request storm — one dashboard load
 8 `agents` GETs and 6 `alerts`/`alert_rules` GETs, and every route change repeated it.
 
 The fix mirrors the pattern `agentStore` already used correctly for a single consumer,
-extended to a single *shared* owner for many:
+extended to a single _shared_ owner for many:
 
 - **`agentStore`** and **`alertsStore`** (`src/stores/`) are the only two places that
   ever call `pb.collection(...).getFullList()` or `.subscribe()` for these collections.
@@ -724,7 +769,7 @@ extended to a single *shared* owner for many:
   count on ServerDetail) gets the data for free instead of adding its own fetch.
 - **`checksStore`** follows the same shape for the `checks` collection (check identity
   and config — name, type, target, thresholds, tags), read by the Checks page and the
-  Dashboard's "Checks" panel (§11). It deliberately does *not* hold live status/latency/
+  Dashboard's "Checks" panel (§11). It deliberately does _not_ hold live status/latency/
   uptime — that comes from a separate polled fetch of `GET /api/custom/checks/summary`
   (`useChecksSummary`, `src/hooks/useChecksSummary.ts`), the same relationship
   `agentStore` (identity) has with Dashboard's own polled `/api/custom/dashboard`
@@ -856,7 +901,7 @@ raw id.
 ```
 
 An operator-or-higher-only Settings sub-page (§3's Navigation) — unlike every other
-list page in this app, it reads a *paged* collection (`pb.collection("audit_log").
+list page in this app, it reads a _paged_ collection (`pb.collection("audit_log").
 getList(page, 50, {sort: "-created", filter})`) rather than `getFullList`, since an
 append-only 180-day audit trail can grow far larger than any other collection this app
 lists. A "Load more" button (shown only while `page < totalPages`) appends the next page
@@ -900,7 +945,7 @@ agents"), the host tab renders it with `agentId` fixed (the selector is hidden e
 never shown-and-disabled, since a disabled control the user can't actually use is worse
 than no control). Filters: an agent select (page only), level chips (single-select —
 "All levels" plus one chip per `error`/`warning`/`info`/`debug`, colored via the same
-tokens `StatusIndicator` uses for critical/warning, since a log's `error` level *is* a
+tokens `StatusIndicator` uses for critical/warning, since a log's `error` level _is_ a
 critical-severity fact even though this isn't the four-state ok/warning/critical/offline
 taxonomy), a unit `Select` (populated from `GET /api/custom/logs/units`, scoped to the
 current agent selection), a debounced (300ms, matching Audit log's free-text filters —
@@ -935,18 +980,18 @@ here would optimize for the wrong reader.
 usually-light marketing/support surfaces, with a dark variant via
 `prefers-color-scheme` for anyone whose system is set to dark):
 
-| Token | Light | Dark | Role |
-|---|---|---|---|
-| `--sp-bg` | `#f7f8fa` | `#0b0f16` | Page background |
-| `--sp-panel` | `#ffffff` | `#131a26` | The one content card |
-| `--sp-border` | `#e4e7ec` | `#232d3d` | Card border, dividers |
-| `--sp-ink` | `#101828` | `#e7ecf3` | Primary text |
+| Token            | Light     | Dark      | Role                     |
+| ---------------- | --------- | --------- | ------------------------ |
+| `--sp-bg`        | `#f7f8fa` | `#0b0f16` | Page background          |
+| `--sp-panel`     | `#ffffff` | `#131a26` | The one content card     |
+| `--sp-border`    | `#e4e7ec` | `#232d3d` | Card border, dividers    |
+| `--sp-ink`       | `#101828` | `#e7ecf3` | Primary text             |
 | `--sp-ink-muted` | `#667085` | `#93a0b4` | Secondary text, captions |
-| `--sp-ok` | `#1a9c6e` | `#34d399` | Operational |
-| `--sp-warn` | `#b5720a` | `#f5a524` | Degraded |
-| `--sp-down` | `#d1373f` | `#f5484f` | Down |
-| `--sp-unknown` | `#6b7280` | `#5b6576` | Unknown |
-| `--sp-accent` | `#3b6fd6` | `#5b9dff` | Links only |
+| `--sp-ok`        | `#1a9c6e` | `#34d399` | Operational              |
+| `--sp-warn`      | `#b5720a` | `#f5a524` | Degraded                 |
+| `--sp-down`      | `#d1373f` | `#f5484f` | Down                     |
+| `--sp-unknown`   | `#6b7280` | `#5b6576` | Unknown                  |
+| `--sp-accent`    | `#3b6fd6` | `#5b9dff` | Links only               |
 
 Status hues echo the internal app's semantic palette (§1) for brand continuity —
 this is still recognizably a NexWatch surface — but every value is re-picked for
@@ -983,6 +1028,7 @@ there is nothing else on this site to navigate to.
 ```
 
 **Principles**:
+
 - Calm during an incident. One reduced status vocabulary (operational / degraded /
   down / unknown), one banner reporting the worst of them — never a grid of red
   that reads more alarming than the actual blast radius.
@@ -992,7 +1038,7 @@ there is nothing else on this site to navigate to.
   The page itself is a second layer of that same discipline: it renders only the
   fields the API returns, so there's no client-side field to accidentally add.
 - A day bar is the industry-standard way to answer "when did this last break,"
-  because it *is* a sequence (calendar days) — unlike the numbered-marker pattern
+  because it _is_ a sequence (calendar days) — unlike the numbered-marker pattern
   the frontend-design skill warns against, which is a tell precisely when applied
   to non-sequential content.
 
@@ -1001,7 +1047,7 @@ there is nothing else on this site to navigate to.
 1. Cream+terracotta / near-black+acid-green — neither: light mode is a neutral
    near-white, dark mode reuses the app's own blue-charcoal, not a generic near-black.
 2. SaaS-card kit (identical rounded cards, one shadow everywhere) — rejected; this
-   page is intentionally *one* card, not a grid of them, because there is exactly
+   page is intentionally _one_ card, not a grid of them, because there is exactly
    one thing on it: the fleet's status.
 3. Tracked-out ALL-CAPS eyebrows, middle-dot meta strings — none used; matches
    the main app's copy rules (§6).

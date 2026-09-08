@@ -36,6 +36,9 @@
   --color-panel-raised: #1a2333;
   --color-line: #232d3d;
   --color-line-soft: #1a2230;
+  /* Chrome surfaces (top context bar, sidebar): a half-step above the void so
+     the operations frame reads as frame, not as one more content panel. */
+  --color-void-lift: #0d131f;
 
   /* Brand accent — interactive elements only, never status */
   --color-signal: #5b9dff;
@@ -90,6 +93,21 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Full-bleed band inside the padded main container — a section that reaches the
+   viewport edges instead of floating as another card. The inset mirrors
+   AppShell's <main> padding exactly; if that padding changes, this must too. */
+.bleed-x {
+  margin-inline: -1rem;
+  padding-inline: 1rem;
+}
+
+@media (min-width: 640px) {
+  .bleed-x {
+    margin-inline: -1.5rem;
+    padding-inline: 1.5rem;
+  }
 }
 
 /* Scrollbar styling for dark theme */
