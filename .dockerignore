@@ -1,0 +1,30 @@
+.git
+.git/**
+.pi
+.pi/**
+.codegraph
+.codegraph/**
+.atl
+.atl/**
+.DS_Store
+
+# Local build/runtime artifacts
+pb_data
+pb_data/**
+bin
+bin/**
+nexwatch-agent
+nexwatch-hub
+hub
+
+# UI dependencies and build output must be produced inside Docker
+ui/node_modules
+ui/node_modules/**
+ui/dist
+ui/dist/**
+ui/.vite
+ui/.vite/**
+
+# Logs and temporary files
+*.log
+/tmp
